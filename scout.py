@@ -142,23 +142,38 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-2.5-flash')
     
-    items_block = "\n".join(f'{i}. "{l.title}" — {l.price:.2f} €' for i, l in enumerate(listings, 1))
+    # 🔥 The payload now holds BOTH text instructions and raw image files
+    payload = [
+        "You are a strict resale pricing expert for the European second-hand market.\n"
+        "Evaluate the following items. Look closely at the provided images to spot defects (scratches, cracks, missing parts, or if it is just an empty 'OVP' box).\n"
+        "If the image is blurry, does not show the actual item, or looks like a stock photo from Google, severely lower the 'score'.\n\n"
+    ]
     
-    # 🔥 The upgraded prompt asking for a score and detailed explanation
-    prompt = (
-        "You are a resale pricing expert for the European second-hand market.\n"
-        f"Evaluate these items:\n{items_block}\n\n"
-        "Return a JSON array of objects with strictly these keys: "
-        "'id' (integer), 'resale_price' (float), "
-        "'reasoning' (a detailed 2-3 sentence explanation of the target buyer and why it is a good deal), "
-        "and 'score' (an integer from 1 to 100 rating how fast and likely this is to sell for profit)."
+    for i, l in enumerate(listings, 1):
+        payload.append(f"Item {i}: Title: '{l.title}' — Buy Price: {l.price:.2f} €")
+        
+        # 🔥 Download the eBay image secretly and give it to the AI
+        if l.image_url:
+            try:
+                img_resp = requests.get(l.image_url, timeout=5)
+                if img_resp.status_code == 200:
+                    payload.append({"mime_type": "image/jpeg", "data": img_resp.content})
+            except Exception:
+                pass
+
+    payload.append(
+        "\nReturn ONLY a JSON array of objects with strictly these keys:\n"
+        "- 'id' (integer matching the item number)\n"
+        "- 'resale_price' (float)\n"
+        "- 'reasoning' (2 sentences: Who is the buyer? What did you see in the photo regarding condition?)\n"
+        "- 'score' (1-100 rating. Deduct massive points for empty boxes, damage, or stock photos)."
     )
 
-    print(f"[AI] Asking Gemini to evaluate {len(listings)} items...", flush=True)
+    print(f"[AI] Handing Gemini {len(listings)} items WITH images to evaluate...", flush=True)
     
     try:
         response = model.generate_content(
-            prompt,
+            payload,
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
                 temperature=0.2
@@ -177,7 +192,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
         listing = listings[idx]
         resale_price = float(entry.get("resale_price", 0))
         reasoning = str(entry.get("reasoning", ""))
-        score = int(entry.get("score", 50)) # 🔥 Extract the score
+        score = int(entry.get("score", 50))
         
         if resale_price <= 0: continue
 
