@@ -57,13 +57,11 @@ def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     
-    # 1. Using eBay.de Mobile URL for much easier scraping
+    # 1. Target eBay.de Mobile
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
+    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&ultra_slow=true"
     
-    # 2. Force mobile device presentation to bypass complex desktop JS
-    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile"
-    
-    print(f"[SCRAPER] Fetching '{current_keyword}' via Mobile Proxy...", flush=True)
+    print(f"[SCRAPER] Fetching '{current_keyword}' via Universal Proxy...", flush=True)
     
     try:
         response = requests.get(proxy_url, timeout=60)
@@ -74,46 +72,47 @@ def scrape_ebay_listings() -> list[Listing]:
 
     soup = BeautifulSoup(response.text, "html.parser")
     
-    # Mobile items use simple .item or .s-item wrappers
-    items = soup.select(".s-item, .item, li[data-view]")
-    print(f"[DEBUG] Raw items detected: {len(items)}", flush=True)
+    # 🔥 UNIVERSAL SELECTOR: Find anything that might be an item container
+    items = soup.find_all(["li", "div"], class_=re.compile(r"item|s-item|result"))
+    print(f"[DEBUG] Containers found: {len(items)}", flush=True)
 
     listings: list[Listing] = []
-    for item in items:
+    for i, item in enumerate(items):
         if len(listings) >= NUM_LISTINGS: break
         
         try:
-            link_el = item.select_one("a[href*='itm/']")
-            title_el = item.select_one(".s-item__title, .item__title, h3")
-            price_el = item.select_one(".s-item__price, .item__price, .price")
-            
-            if not link_el or not title_el: continue
+            # 🔥 UNIVERSAL LINK: Find the first link containing "itm/"
+            link_el = item.find("a", href=re.compile(r"itm/"))
+            if not link_el: continue
             
             item_url = link_el["href"].split("?")[0]
             if item_url in SEEN_ITEMS: continue
             
-            title = title_el.get_text(strip=True)
+            # 🔥 UNIVERSAL TITLE: Grab the longest text element in the container
+            texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
+            title = texts[0] if texts else "Unknown Item"
             if "shop on ebay" in title.lower(): continue
 
-            # Robust Price Parsing (handles 'EUR 20,00' or '20.00 €')
-            price_text = price_el.get_text(strip=True) if price_el else "1.0"
+            # 🔥 UNIVERSAL PRICE: Find any text with a currency symbol or "EUR"
+            price_text = "1.0"
+            for s in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
+                price_text = s
+                break
+            
             price_clean = re.sub(r'[^\d.,]', '', price_text).replace('.', '').replace(',', '.')
-            try:
-                price_val = float(re.search(r"(\d+\.\d+|\d+)", price_clean).group(1))
-            except:
-                price_val = 1.0 # Diagnostic fallback
+            price_val = float(re.search(r"(\d+\.\d+|\d+)", price_clean).group(1))
 
             img_el = item.find("img")
             image_url = img_el.get("src") or img_el.get("data-src") or ""
             
-            print(f"[DEBUG] Validated: {title[:20]} | {price_val}€", flush=True)
-            
             listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
             SEEN_ITEMS.add(item_url)
-        except:
+            
+        except Exception as e:
+            if i == 0: print(f"[DEBUG] First item error: {e}", flush=True)
             continue
 
-    print(f"[SCRAPER] Found {len(listings)} items.", flush=True)
+    print(f"[SCRAPER] Successfully parsed {len(listings)} items.", flush=True)
     return listings
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
