@@ -1,7 +1,3 @@
-"""
-Arbitrage Scout Bot - 2026 Gemini High-Speed Edition (Discord Fix)
-"""
-
 import json
 import os
 import re
@@ -9,8 +5,6 @@ import random
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
-
 from google import genai
 from google.genai import types
 import requests
@@ -26,7 +20,7 @@ def index():
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   # 🔥 Set low to force-send every item to Discord for testing
+MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
 NUM_LISTINGS = 12
 SCAN_INTERVAL_SECONDS = 300 
@@ -118,10 +112,9 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
 
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
     
-try:
+    try:
         response = client.models.generate_content(
-            # 🔥 Change from 'gemini-2.0-flash' to 'gemini-1.5-flash'
-            model='gemini-1.5-flash', 
+            model='gemini-1.5-flash', # 🔥 Switched to 1.5-flash for higher free quota
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
@@ -133,11 +126,9 @@ try:
     profitable = []
     for entry in items_data:
         try:
-            # 🔥 FIX: Robust ID parser handles 'Item 1' or just 1
             raw_id = str(entry.get("id", "0"))
             clean_id = int(re.search(r'\d+', raw_id).group())
             idx = clean_id - 1
-            
             if 0 <= idx < len(listings):
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
