@@ -39,7 +39,7 @@ HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 
 EBAY_SEARCH_URL = (
     "https://www.ebay.de/sch/i.html"
-    "?_nkw=&_sop=10&LH_BIN=1&_udhi=15&_ipg=60&rt=nc"
+    "?_nkw=sony&_sop=10&LH_BIN=1&_udhi=15&_ipg=60&rt=nc"
 )
 
 # Rotate these to avoid eBay blocking the Render IP
