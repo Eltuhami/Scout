@@ -20,9 +20,9 @@ def index():
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   # Force-send every item to prove it works
+MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
-NUM_LISTINGS = 3         # Reduced batch size to stay under free-tier limits
+NUM_LISTINGS = 2         # Reduced for Free Tier stability
 SCAN_INTERVAL_SECONDS = 300 
 
 SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
@@ -50,7 +50,6 @@ def scrape_ebay_listings() -> list[Listing]:
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
     
     print(f"[SCRAPER] Fetching '{current_keyword}'...", flush=True)
-    
     try:
         response = requests.get(proxy_url, timeout=60)
         response.raise_for_status()
@@ -98,7 +97,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    payload = ["Evaluate these items for resale on Vinted. Return JSON array.\n"]
+    payload = ["Analyze resale value for Vinted. Return JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url.startswith("http"):
@@ -106,25 +105,20 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
 
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
-    # 🔥 RETRY LOGIC: Stay alive even when quota is hit
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash', 
-                contents=payload,
-                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
-            )
-            items_data = json.loads(response.text)
-            break # Success!
-        except Exception as e:
-            if "429" in str(e) and attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 30
-                print(f"[AI] Quota hit. Retrying in {wait_time}s...", flush=True)
-                time.sleep(wait_time)
-                continue
-            print(f"[AI] Gemini Error: {e}", flush=True)
-            return []
+    try:
+        # 🔥 THE FIX: Using the correct 2026 Model ID
+        response = client.models.generate_content(
+            model='gemini-2.0-flash', 
+            contents=payload,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+        )
+        items_data = json.loads(response.text)
+    except Exception as e:
+        if "429" in str(e):
+            print("[AI] Quota hit. Sleeping 60s...", flush=True)
+            time.sleep(60) # Patience logic for Free Tier
+        print(f"[AI] Gemini Error: {e}", flush=True)
+        return []
 
     profitable = []
     for entry in items_data:
@@ -155,10 +149,10 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
             embed.set_thumbnail(url=listing.image_url)
         embed.add_embed_field(name="🏷️ Buy Price", value=f"**{listing.price:.2f} €**", inline=True)
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
-        embed.add_embed_field(name="🤖 Reasoning", value=analysis.reasoning[:1000], inline=False)
+        embed.add_embed_field(name="🤖 AI Reason", value=analysis.reasoning[:1000], inline=False)
         webhook.add_embed(embed)
         webhook.execute()
-        time.sleep(2) # Prevent Discord rate limiting
+        time.sleep(2) # Prevent Discord spam blocks
 
 def scout_loop():
     while True:
