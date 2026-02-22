@@ -1,6 +1,3 @@
-"""
-Arbitrage Scout Bot - 2026 Stable Release
-"""
 import json
 import os
 import re
@@ -8,8 +5,6 @@ import random
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
-
 from google import genai
 from google.genai import types
 import requests
@@ -25,12 +20,12 @@ def index():
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   # Force-send every item for initial testing
+MIN_NET_PROFIT = -100.0   # Force-send every item to prove it works
 FEE_RATE = 0.15
-NUM_LISTINGS = 12
+NUM_LISTINGS = 3         # Reduced batch size to stay under free-tier limits
 SCAN_INTERVAL_SECONDS = 300 
 
-SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "Pokemon Karten", "GoPro"]
+SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
 SEEN_ITEMS = set()
 
 @dataclass
@@ -44,7 +39,6 @@ class Listing:
 class ProfitAnalysis:
     listing: Listing
     resale_price: float
-    fees: float
     net_profit: float
     reasoning: str
     score: int
@@ -53,17 +47,15 @@ def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    
-    # Using 'render=true' to ensure full mobile content is captured
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
     
-    print(f"[SCRAPER] Fetching '{current_keyword}' via Mobile Proxy...", flush=True)
+    print(f"[SCRAPER] Fetching '{current_keyword}'...", flush=True)
     
     try:
         response = requests.get(proxy_url, timeout=60)
         response.raise_for_status()
     except Exception as exc:
-        print(f"[SCRAPER] Connection error: {exc}", flush=True)
+        print(f"[SCRAPER] Proxy failed: {exc}", flush=True)
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -80,9 +72,8 @@ def scrape_ebay_listings() -> list[Listing]:
             item_url = link_el["href"].split("?")[0]
             if item_url in SEEN_ITEMS: continue
             
-            # Universal content grabber
             texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
-            title = texts[0] if texts else "Item Name Missing"
+            title = texts[0] if texts else "Unknown Item"
             
             price_text = "1.0"
             for s in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
@@ -107,49 +98,48 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    payload = ["Analyze resale value. Return strictly valid JSON array.\n"]
+    payload = ["Evaluate these items for resale on Vinted. Return JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
-        if l.image_url and l.image_url.startswith("http"):
-            try:
-                img_resp = requests.get(l.image_url, timeout=5)
-                if img_resp.status_code == 200:
-                    payload.append(types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg"))
-            except: pass
+        if l.image_url.startswith("http"):
+            payload.append(types.Part.from_uri(file_uri=l.image_url, mime_type="image/jpeg"))
 
-    payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
+    payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
-    try:
-        # 🔥 FIX: 2026 Standard Model ID
-        response = client.models.generate_content(
-            model='gemini-2.0-flash', 
-            contents=payload,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
-        )
-        items_data = json.loads(response.text)
-    except Exception as e:
-        if "429" in str(e):
-            print("[AI] Quota hit. Sleeping 60s...", flush=True)
-            time.sleep(60)
-        print(f"[AI] Gemini Error: {e}", flush=True)
-        return []
+    # 🔥 RETRY LOGIC: Stay alive even when quota is hit
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash', 
+                contents=payload,
+                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+            )
+            items_data = json.loads(response.text)
+            break # Success!
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 30
+                print(f"[AI] Quota hit. Retrying in {wait_time}s...", flush=True)
+                time.sleep(wait_time)
+                continue
+            print(f"[AI] Gemini Error: {e}", flush=True)
+            return []
 
     profitable = []
     for entry in items_data:
         try:
-            # Safe ID parser to handle "Item 1" or 1
             raw_id = str(entry.get("id", "0"))
             clean_id = int(re.search(r'\d+', raw_id).group())
             idx = clean_id - 1
-            
             if 0 <= idx < len(listings):
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
                 if profit >= MIN_NET_PROFIT:
                     profitable.append(ProfitAnalysis(
-                        listing=l, resale_price=resale, fees=round(resale*FEE_RATE, 2),
-                        net_profit=round(profit, 2), reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
+                        listing=l, resale_price=resale, net_profit=round(profit, 2),
+                        reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
                     ))
         except: continue
     return profitable
@@ -163,13 +153,12 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
         if listing.image_url.startswith("http"):
             embed.set_thumbnail(url=listing.image_url)
-        embed.add_embed_field(name="🔥 Flip Score", value=f"**{analysis.score}/100**", inline=False)
         embed.add_embed_field(name="🏷️ Buy Price", value=f"**{listing.price:.2f} €**", inline=True)
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
-        embed.add_embed_field(name="🤖 AI Reason", value=analysis.reasoning[:1000], inline=False)
+        embed.add_embed_field(name="🤖 Reasoning", value=analysis.reasoning[:1000], inline=False)
         webhook.add_embed(embed)
         webhook.execute()
-        time.sleep(1)
+        time.sleep(2) # Prevent Discord rate limiting
 
 def scout_loop():
     while True:
