@@ -78,31 +78,32 @@ def send_alert_to_discord(message: str):
 
 def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
-    # 🔥 FIX: Force the price to be a clean integer in the URL to prevent eBay errors
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     
-    # 🔥 Switch to eBay Austria for local deals
+    # Target eBay Austria
     ebay_url = f"https://www.ebay.at/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&_ipg=60&rt=nc"
     
-    # 🔥 Route the request through the automated proxy
+    # Route through ScraperAPI proxy
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}"
     
     print(f"[SCRAPER] Fetching '{current_keyword}' via Proxy …", flush=True)
     
     try:
-        # 🔥 Drop the fake headers, the proxy handles all Captchas automatically
         response = requests.get(proxy_url, timeout=45)
         response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"[SCRAPER] Request failed: {exc}", flush=True)
+        return []
 
     soup = BeautifulSoup(response.text, "html.parser")
     
-    # 🔥 DEBUGGER: This will print exactly what page eBay is forcing the bot to look at
+    # DEBUGGER: Verify page content
     page_title = soup.title.get_text(strip=True) if soup.title else "No Title Found"
     print(f"[DEBUG] eBay Page Title: {page_title}", flush=True)
 
     if any(warn in response.text.lower() for warn in ["captcha", "pardon our interruption", "security measure"]):
         print("!!! [ALERT] eBay Captcha triggered !!!", flush=True)
-        send_alert_to_discord("🚨 **eBay Security Block!** The bot hit a Captcha. Resting until next cycle.")
+        send_alert_to_discord("🚨 **eBay Security Block!** The bot hit a Captcha via proxy.")
         return []
 
     items = soup.select("li.s-item")
