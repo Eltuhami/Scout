@@ -118,9 +118,10 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
 
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
     
-    try:
+try:
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            # 🔥 Change from 'gemini-2.0-flash' to 'gemini-1.5-flash'
+            model='gemini-1.5-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
