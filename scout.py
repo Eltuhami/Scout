@@ -99,35 +99,46 @@ def scrape_ebay_listings() -> list[Listing]:
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return []
+    if not api_key: 
+        print("[AI] Missing API Key", flush=True)
+        return []
 
-    # 2026 SDK Client initialization
+    # Initialize the 2026 Gen AI Client
     client = genai.Client(api_key=api_key)
-    payload = ["Analyze resale value for Vinted. Look for defects in photos.\n"]
     
+    payload = ["Identify these items. Estimate resale value on Vinted. Check for damage in photos.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
-        if l.image_url:
+        if l.image_url and l.image_url.startswith("http"):
             try:
                 img_resp = requests.get(l.image_url, timeout=5)
                 if img_resp.status_code == 200:
                     payload.append(types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg"))
             except: pass
 
-    payload.append("\nReturn JSON array: [{'id', 'resale_price', 'reasoning', 'score'}]")
+    payload.append("\nReturn JSON array only: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 FIX: Exact model name for 2026 SDK to avoid 404
+        # 🔥 THE ABSOLUTE FIX: Exact string format for 2026 SDK
         response = client.models.generate_content(
             model='gemini-1.5-flash', 
             contents=payload,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            )
         )
+        
+        if not response or not response.text:
+            print("[AI] Empty response from Gemini", flush=True)
+            return []
+            
         items_data = json.loads(response.text)
+        
     except Exception as e:
-        # 🔥 FIX: Handle the '429 Quota' error by sleeping the bot
+        # Handle the 429 quota limit we saw in your previous logs
         if "429" in str(e):
-            print("[AI] Quota hit! Sleeping 60s...", flush=True)
+            print("[AI] Quota full. Sleeping 60s...", flush=True)
             time.sleep(60)
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
@@ -135,7 +146,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     profitable = []
     for entry in items_data:
         try:
-            # Robust ID cleaning for 'Item 1' or '1'
+            # Safe ID extraction (handles '1' or 'Item 1')
             raw_id = str(entry.get("id", "0"))
             clean_id = int(re.search(r'\d+', raw_id).group())
             idx = clean_id - 1
@@ -145,7 +156,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
                 
-                # Check against your profit threshold (currently set to -100 for testing)
+                # Currently set to -100 to force the Discord ping
                 if profit >= MIN_NET_PROFIT:
                     profitable.append(ProfitAnalysis(
                         listing=l, resale_price=resale, fees=round(resale*FEE_RATE, 2),
