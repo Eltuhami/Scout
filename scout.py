@@ -78,13 +78,16 @@ def send_alert_to_discord(message: str):
 
 def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
-    search_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={MAX_BUY_PRICE}&_ipg=60&rt=nc"
+    # 🔥 FIX: Force the price to be a clean integer in the URL to prevent eBay errors
+    search_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&_ipg=60&rt=nc"
     
     print(f"[SCRAPER] Fetching '{current_keyword}' (max {MAX_BUY_PRICE} €) …", flush=True)
     
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+        "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+        # 🔥 FIX: Inject fake cookies to bypass the EU Consent Wall
+        "Cookie": "dp1=bpf=%5E; s=CgAD4ACBmZqNiZmM0NTE5YjM0MWE5Njk2MzM4ZThlZmZmZmZkMGFhZg==;" 
     }
 
     try:
@@ -94,12 +97,17 @@ def scrape_ebay_listings() -> list[Listing]:
         print(f"[SCRAPER] Request failed: {exc}", flush=True)
         return []
 
+    soup = BeautifulSoup(response.text, "html.parser")
+    
+    # 🔥 DEBUGGER: This will print exactly what page eBay is forcing the bot to look at
+    page_title = soup.title.get_text(strip=True) if soup.title else "No Title Found"
+    print(f"[DEBUG] eBay Page Title: {page_title}", flush=True)
+
     if any(warn in response.text.lower() for warn in ["captcha", "pardon our interruption", "security measure"]):
         print("!!! [ALERT] eBay Captcha triggered !!!", flush=True)
         send_alert_to_discord("🚨 **eBay Security Block!** The bot hit a Captcha. Resting until next cycle.")
         return []
 
-    soup = BeautifulSoup(response.text, "html.parser")
     items = soup.select("li.s-item")
     listings: list[Listing] = []
 
