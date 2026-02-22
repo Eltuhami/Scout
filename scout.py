@@ -80,80 +80,57 @@ def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     
-    # Target eBay Austria
-    ebay_url = f"https://www.ebay.at/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&_ipg=60&rt=nc"
+    # 1. Targeted eBay Austria URL
+    ebay_url = f"https://www.ebay.at/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&rt=nc"
     
-    # Route through ScraperAPI proxy
-    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}"
+    # 2. Force Rendering (Critical for finding items)
+    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&render=true"
     
-    print(f"[SCRAPER] Fetching '{current_keyword}' via Proxy …", flush=True)
+    print(f"[SCRAPER] Fetching '{current_keyword}' with JS Rendering...", flush=True)
     
     try:
-        response = requests.get(proxy_url, timeout=45)
+        response = requests.get(proxy_url, timeout=60)
         response.raise_for_status()
-    except requests.RequestException as exc:
-        print(f"[SCRAPER] Request failed: {exc}", flush=True)
+    except Exception as exc:
+        print(f"[SCRAPER] Connection failed: {exc}", flush=True)
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
     
-    # DEBUGGER: Verify page content
-    page_title = soup.title.get_text(strip=True) if soup.title else "No Title Found"
-    print(f"[DEBUG] eBay Page Title: {page_title}", flush=True)
-
-    # 🔥 FIX 1: Use a more flexible selector to find items
-    items = soup.select(".s-item__wrapper, .s-item, li[data-view='mi:1686|iid:1']")
-    print(f"[DEBUG] Raw items found on page: {len(items)}", flush=True)
-
+    # 3. Flexible selector: Find anything that looks like an eBay item
+    items = soup.find_all(class_=re.compile("s-item"))
     listings: list[Listing] = []
 
     for item in items:
         if len(listings) >= NUM_LISTINGS: break
         
-        # 1. Get the link and title
-        link_el = item.select_one("a.s-item__link")
-        title_el = item.select_one(".s-item__title, h3")
-        
-        if not link_el or not title_el: continue
-        
-        item_url = link_el["href"].split("?")[0]
-        title = title_el.get_text(strip=True)
-        
-        # Skip eBay placeholders
-        if any(x in title.lower() for x in ["shop on ebay", "ergebnisse", "neue anzeige"]): 
-            continue
-        
-        # 2. Skip if already seen
-        if item_url in SEEN_ITEMS: continue
-
-        # 3. Get the price with more robust cleaning
-        price_el = item.select_one(".s-item__price")
-        if not price_el: continue
-        
-        # Remove currency symbols and handle European number formatting
-        raw_price = price_el.get_text(strip=True).replace("EUR", "").replace("€", "").strip()
-        # Handle 1.200,50 -> 1200.50
-        clean_price = raw_price.replace(".", "").replace(",", ".")
-        
         try:
-            price_match = re.search(r"(\d+\.?\d*)", clean_price)
-            if not price_match: continue
-            price = float(price_match.group(1))
-        except ValueError:
+            link_el = item.find("a", href=re.compile("itm/"))
+            title_el = item.find(["h3", "h2"]) # eBay varies between these
+            price_el = item.select_one(".s-item__price")
+            
+            if not link_el or not title_el or not price_el: continue
+            
+            item_url = link_el["href"].split("?")[0]
+            if item_url in SEEN_ITEMS: continue
+            
+            title = title_el.get_text(strip=True)
+            if "shop on ebay" in title.lower(): continue
+
+            # Robust European Price Parsing (1.234,56 -> 1234.56)
+            price_str = price_el.get_text(strip=True).replace(".", "").replace(",", ".")
+            price_val = float(re.search(r"(\d+\.\d+|\d+)", price_str).group(1))
+
+            if 0 < price_val <= MAX_BUY_PRICE:
+                img_el = item.find("img")
+                image_url = img_el.get("src") or img_el.get("data-src") or ""
+                
+                SEEN_ITEMS.add(item_url)
+                listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
+        except:
             continue
 
-        if price <= 0 or price > MAX_BUY_PRICE: continue
-
-        # 4. Get the image
-        img_el = item.select_one(".s-item__image-wrapper img")
-        image_url = ""
-        if img_el:
-            image_url = img_el.get("src") or img_el.get("data-src") or ""
-
-        SEEN_ITEMS.add(item_url)
-        listings.append(Listing(title=title, price=price, image_url=image_url, item_url=item_url))
-
-    print(f"[SCRAPER] Found {len(listings)} NEW listing(s) after filtering.", flush=True)
+    print(f"[SCRAPER] Found {len(listings)} items.", flush=True)
     return listings
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
