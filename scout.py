@@ -30,8 +30,8 @@ def health():
     return "OK", 200
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
-MAX_BUY_PRICE = 9999999999999999999
-MIN_NET_PROFIT = 0
+MAX_BUY_PRICE = 15
+MIN_NET_PROFIT = 10
 FEE_RATE = 0.15
 NUM_LISTINGS = 12
 SCAN_INTERVAL_SECONDS = 180  # 🔥 Upgraded: Scans every 3 minutes now!
