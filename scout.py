@@ -145,8 +145,8 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
         print("[AI] ERROR — GEMINI_API_KEY is not set.", flush=True)
         return []
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    # 🔥 FIX: Using the new SDK syntax here
+    client = genai.Client(api_key=api_key)
     
     # 🔥 The payload now holds BOTH text instructions and raw image files
     payload = [
@@ -163,7 +163,10 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
             try:
                 img_resp = requests.get(l.image_url, timeout=5)
                 if img_resp.status_code == 200:
-                    payload.append({"mime_type": "image/jpeg", "data": img_resp.content})
+                    # 🔥 FIX: New SDK image format
+                    payload.append(
+                        types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg")
+                    )
             except Exception:
                 pass
 
@@ -178,9 +181,11 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     print(f"[AI] Handing Gemini {len(listings)} items WITH images to evaluate...", flush=True)
     
     try:
-        response = model.generate_content(
-            payload,
-            generation_config=genai.GenerationConfig(
+        # 🔥 FIX: New SDK generate_content syntax
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=payload,
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.2
             )
