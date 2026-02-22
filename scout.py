@@ -18,11 +18,11 @@ app = Flask(__name__)
 def index():
     return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
-# ─── 2026 Free-Tier Optimized Configuration ─────────────────────────────────────
+# ─── 2026 Stable Configuration ──────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
 MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
-NUM_LISTINGS = 1         # 🔥 CRITICAL: 1 item per cycle stays under 5 RPM limit
+NUM_LISTINGS = 1         # One item per cycle to stay safe on free tier
 SCAN_INTERVAL_SECONDS = 300 
 
 SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
@@ -97,7 +97,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    payload = ["Analyze resale value. Return JSON array.\n"]
+    payload = ["Analyze resale value for Vinted. Return JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url.startswith("http"):
@@ -106,9 +106,9 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 THE ONLY MODEL: Consolidated to 2.0 Flash
+        # 🔥 SWITCHED TO LITE MODEL FOR HIGHER QUOTA
         response = client.models.generate_content(
-            model='gemini-2.0-flash', 
+            model='gemini-2.0-flash-lite-preview-02-05', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
@@ -153,8 +153,6 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         embed.add_embed_field(name="🤖 AI Reason", value=analysis.reasoning[:1000], inline=False)
         webhook.add_embed(embed)
         
-        # 🔥 Safety wait to prevent webhook rejection
-        time.sleep(2)
         try:
             webhook.execute()
             print("[DISCORD] Ping successful!", flush=True)
