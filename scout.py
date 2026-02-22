@@ -11,7 +11,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import requests
 from bs4 import BeautifulSoup
 from discord_webhook import DiscordEmbed, DiscordWebhook
@@ -29,7 +30,7 @@ def health():
     return "OK", 200
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
-MAX_BUY_PRICE = 14.0
+MAX_BUY_PRICE = 9999999999999999999
 MIN_NET_PROFIT = 0
 FEE_RATE = 0.15
 NUM_LISTINGS = 12
