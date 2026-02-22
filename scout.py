@@ -39,7 +39,7 @@ SCAN_INTERVAL_SECONDS = 180  # 🔥 Upgraded: Scans every 3 minutes now!
 SEARCH_KEYWORDS = [
     "nintendo", "sony", "ipod", "gameboy", "playstation",
     "logitech", "sennheiser", "garmin", "jbl", "bose",
-    "kindle", "polaroid", "tamagotchi", "gopro"
+    "kindle", "polaroid", "tamagotchi", "gopro", "Iphone"
 ]
 
 USER_AGENTS = [
@@ -80,57 +80,66 @@ def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     
-    # 1. Targeted eBay Austria URL
-    ebay_url = f"https://www.ebay.at/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&rt=nc"
+    # 🔥 FIX: Search eBay Germany (much more volume) but include Austria shipping
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&rt=nc"
     
-    # 2. Force Rendering (Critical for finding items)
-    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&render=true"
+    # 🔥 PRO TIP: JS Rendering is slow. We'll use standard proxy with "Ultra" mode 
+    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&ultra_slow=true"
     
-    print(f"[SCRAPER] Fetching '{current_keyword}' with JS Rendering...", flush=True)
+    print(f"[SCRAPER] Fetching '{current_keyword}' from eBay.de...", flush=True)
     
     try:
         response = requests.get(proxy_url, timeout=60)
         response.raise_for_status()
     except Exception as exc:
-        print(f"[SCRAPER] Connection failed: {exc}", flush=True)
+        print(f"[SCRAPER] Proxy failed: {exc}", flush=True)
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
-    
-    # 3. Flexible selector: Find anything that looks like an eBay item
-    items = soup.find_all(class_=re.compile("s-item"))
-    listings: list[Listing] = []
+    items = soup.select(".s-item__wrapper, .s-item")
+    print(f"[DEBUG] Raw items detected: {len(items)}", flush=True)
 
+    listings: list[Listing] = []
     for item in items:
         if len(listings) >= NUM_LISTINGS: break
         
-        try:
-            link_el = item.find("a", href=re.compile("itm/"))
-            title_el = item.find(["h3", "h2"]) # eBay varies between these
-            price_el = item.select_one(".s-item__price")
-            
-            if not link_el or not title_el or not price_el: continue
-            
-            item_url = link_el["href"].split("?")[0]
-            if item_url in SEEN_ITEMS: continue
-            
-            title = title_el.get_text(strip=True)
-            if "shop on ebay" in title.lower(): continue
+        title_el = item.select_one(".s-item__title")
+        link_el = item.select_one(".s-item__link")
+        if not title_el or not link_el: continue
 
-            # Robust European Price Parsing (1.234,56 -> 1234.56)
-            price_str = price_el.get_text(strip=True).replace(".", "").replace(",", ".")
-            price_val = float(re.search(r"(\d+\.\d+|\d+)", price_str).group(1))
+        title = title_el.get_text(strip=True)
+        item_url = link_el["href"].split("?")[0]
 
-            if 0 < price_val <= MAX_BUY_PRICE:
-                img_el = item.find("img")
-                image_url = img_el.get("src") or img_el.get("data-src") or ""
-                
-                SEEN_ITEMS.add(item_url)
-                listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
-        except:
+        # 🔥 DIAGNOSTIC: Why are we skipping things?
+        if "shop on ebay" in title.lower() or "ergebnisse" in title.lower():
+            continue
+            
+        if item_url in SEEN_ITEMS:
             continue
 
-    print(f"[SCRAPER] Found {len(listings)} items.", flush=True)
+        price_el = item.select_one(".s-item__price")
+        if not price_el:
+            print(f"[DEBUG] Skipped '{title[:30]}' - No price found", flush=True)
+            continue
+
+        try:
+            # Handle German price format (e.g. 1.200,50)
+            price_str = price_el.get_text(strip=True).replace(".", "").replace(",", ".")
+            price_val = float(re.search(r"(\d+\.\d+|\d+)", price_str).group(1))
+            
+            if price_val > MAX_BUY_PRICE:
+                print(f"[DEBUG] Skipped '{title[:30]}' - Price {price_val} too high", flush=True)
+                continue
+
+            img_el = item.select_one(".s-item__image img")
+            image_url = img_el.get("src") or img_el.get("data-src") or "" if img_el else ""
+
+            SEEN_ITEMS.add(item_url)
+            listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
+        except Exception:
+            continue
+
+    print(f"[SCRAPER] Found {len(listings)} valid NEW items.", flush=True)
     return listings
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
