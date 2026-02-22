@@ -65,6 +65,7 @@ class ProfitAnalysis:
     fees: float
     net_profit: float
     reasoning: str
+    score: int
 
 def send_alert_to_discord(message: str):
     webhook_url = os.getenv("DISCORD_WEBHOOK", "")
@@ -139,21 +140,23 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
         return []
 
     genai.configure(api_key=api_key)
-    
-    # 🔥 Using the fast Flash model
     model = genai.GenerativeModel('gemini-2.5-flash')
     
     items_block = "\n".join(f'{i}. "{l.title}" — {l.price:.2f} €' for i, l in enumerate(listings, 1))
+    
+    # 🔥 The upgraded prompt asking for a score and detailed explanation
     prompt = (
         "You are a resale pricing expert for the European second-hand market.\n"
         f"Evaluate these items:\n{items_block}\n\n"
-        "Return a JSON array of objects with strictly these keys: 'id' (integer matching the list), 'resale_price' (float), and 'reasoning' (1-sentence string)."
+        "Return a JSON array of objects with strictly these keys: "
+        "'id' (integer), 'resale_price' (float), "
+        "'reasoning' (a detailed 2-3 sentence explanation of the target buyer and why it is a good deal), "
+        "and 'score' (an integer from 1 to 100 rating how fast and likely this is to sell for profit)."
     )
 
     print(f"[AI] Asking Gemini to evaluate {len(listings)} items...", flush=True)
     
     try:
-        # 🔥 Forcing Gemini to output perfect JSON
         response = model.generate_content(
             prompt,
             generation_config=genai.GenerationConfig(
@@ -174,16 +177,16 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
         listing = listings[idx]
         resale_price = float(entry.get("resale_price", 0))
         reasoning = str(entry.get("reasoning", ""))
+        score = int(entry.get("score", 50)) # 🔥 Extract the score
+        
         if resale_price <= 0: continue
 
         revenue_after_fees = resale_price * (1 - FEE_RATE)
         fees = resale_price * FEE_RATE
         net_profit = revenue_after_fees - listing.price
 
-        print(f"  [{idx + 1}] {listing.title[:50]} → Resale {resale_price:.2f} € | Profit {net_profit:.2f} €", flush=True)
-
         if net_profit >= MIN_NET_PROFIT:
-            profitable.append(ProfitAnalysis(listing=listing, resale_price=resale_price, fees=round(fees, 2), net_profit=round(net_profit, 2), reasoning=reasoning))
+            profitable.append(ProfitAnalysis(listing=listing, resale_price=resale_price, fees=round(fees, 2), net_profit=round(net_profit, 2), reasoning=reasoning, score=score))
 
     return profitable
 
@@ -196,10 +199,15 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         webhook = DiscordWebhook(url=webhook_url, username="Gemini Scout ⚡")
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
         embed.set_thumbnail(url=listing.image_url)
+        
+        # 🔥 Add the new score to the top of the embed
+        embed.add_embed_field(name="🔥 Flip Score", value=f"**{analysis.score}/100**", inline=False)
+        
         embed.add_embed_field(name="🏷️ Buy Price", value=f"**{listing.price:.2f} €**", inline=True)
         embed.add_embed_field(name="📈 Resale Price", value=f"**{analysis.resale_price:.2f} €**", inline=True)
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
-        embed.add_embed_field(name="🤖 Gemini Reasoning", value=analysis.reasoning[:1024] or "N/A", inline=False)
+        embed.add_embed_field(name="🤖 Gemini Strategy", value=analysis.reasoning[:1024] or "N/A", inline=False)
+        
         embed.set_footer(text="Arbitrage Scout Bot • Gemini API ⚡")
         embed.set_timestamp()
         webhook.add_embed(embed)
