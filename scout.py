@@ -40,6 +40,8 @@ SEARCH_KEYWORDS = [
     "nintendo", "sony", "ipod", "gameboy", "playstation",
     "logitech", "sennheiser", "garmin", "jbl", "bose",
     "kindle", "polaroid", "tamagotchi", "gopro", "Iphone"
+    "Samsung Galaxy", "Nintendo Switch", "Lego Star Wars", 
+    "Pokemon Karten", "Playstation 5", "AirPods", "iPad"
 ]
 
 USER_AGENTS = [
