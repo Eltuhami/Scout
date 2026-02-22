@@ -119,9 +119,9 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return []
 
-    # 2026 SDK Syntax
     client = genai.Client(api_key=api_key)
-    payload = ["Evaluate these items for resale on Vinted. Check photo condition.\n"]
+    # 🔥 Updated Prompt for stricter ID response
+    payload = ["Evaluate these items for resale. Return strictly valid JSON.\n"]
     
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
@@ -132,13 +132,13 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                     payload.append(types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg"))
             except: pass
 
-    payload.append("\nReturn JSON array: [{'id', 'resale_price', 'reasoning', 'score'}]")
+    payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
     
     try:
         response = client.models.generate_content(
-            model='gemini-3-flash-preview',
+            model='gemini-2.0-flash', 
             contents=payload,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2)
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
         items_data = json.loads(response.text)
     except Exception as e:
@@ -147,20 +147,22 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
 
     profitable = []
     for entry in items_data:
-        idx = int(entry.get("id", 0)) - 1
-        if 0 <= idx < len(listings):
-            l = listings[idx]
-            resale = float(entry.get("resale_price", 0))
-            profit = (resale * (1 - FEE_RATE)) - l.price
-            if profit >= MIN_NET_PROFIT:
-                profitable.append(ProfitAnalysis(
-                    listing=l, 
-                    resale_price=resale, 
-                    fees=round(resale*FEE_RATE, 2), 
-                    net_profit=round(profit, 2), 
-                    reasoning=entry.get("reasoning", ""), 
-                    score=int(entry.get("score", 50))
-                ))
+        try:
+            # 🔥 FIX: Robust ID cleaning (handles 'Item 1' or 1)
+            raw_id = str(entry.get("id", "0"))
+            clean_id = int(re.search(r'\d+', raw_id).group())
+            idx = clean_id - 1
+            
+            if 0 <= idx < len(listings):
+                l = listings[idx]
+                resale = float(entry.get("resale_price", 0))
+                profit = (resale * (1 - FEE_RATE)) - l.price
+                if profit >= MIN_NET_PROFIT:
+                    profitable.append(ProfitAnalysis(
+                        listing=l, resale_price=resale, fees=round(resale*FEE_RATE, 2),
+                        net_profit=round(profit, 2), reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
+                    ))
+        except: continue
     return profitable
 
 def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
@@ -170,14 +172,18 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         listing = analysis.listing
         webhook = DiscordWebhook(url=webhook_url, username="Gemini Scout ⚡")
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
-        embed.set_thumbnail(url=listing.image_url)
+        
+        # 🔥 FIX: Ensure image URL is valid for Discord
+        if listing.image_url and listing.image_url.startswith("http"):
+            embed.set_thumbnail(url=listing.image_url)
+            
         embed.add_embed_field(name="🔥 Flip Score", value=f"**{analysis.score}/100**", inline=False)
+        embed.add_embed_field(name="🏷️ Buy Price", value=f"**{listing.price:.2f} €**", inline=True)
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
-        embed.add_embed_field(name="🤖 AI Reasoning", value=analysis.reasoning[:1024], inline=False)
+        embed.add_embed_field(name="🤖 Reasoning", value=analysis.reasoning[:1000], inline=False)
         webhook.add_embed(embed)
         webhook.execute()
         time.sleep(1)
-
 def scout_loop():
     while True:
         try:
