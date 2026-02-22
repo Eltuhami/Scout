@@ -18,11 +18,11 @@ app = Flask(__name__)
 def index():
     return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
+# ─── 2026 Free-Tier Optimized Configuration ─────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
 MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
-NUM_LISTINGS = 2         # Reduced for Free Tier stability
+NUM_LISTINGS = 1         # 🔥 CRITICAL: 1 item per cycle stays under 5 RPM limit
 SCAN_INTERVAL_SECONDS = 300 
 
 SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
@@ -97,7 +97,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    payload = ["Analyze resale value for Vinted. Return JSON array.\n"]
+    payload = ["Analyze resale value. Return JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url.startswith("http"):
@@ -106,7 +106,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 THE FIX: Using the correct 2026 Model ID
+        # 🔥 THE ONLY MODEL: Consolidated to 2.0 Flash
         response = client.models.generate_content(
             model='gemini-2.0-flash', 
             contents=payload,
@@ -116,7 +116,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     except Exception as e:
         if "429" in str(e):
             print("[AI] Quota hit. Sleeping 60s...", flush=True)
-            time.sleep(60) # Patience logic for Free Tier
+            time.sleep(60) 
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
 
@@ -143,6 +143,7 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
     if not webhook_url: return
     for analysis in analyses:
         listing = analysis.listing
+        print(f"[DISCORD] Attempting to send: {listing.title[:30]}", flush=True)
         webhook = DiscordWebhook(url=webhook_url, username="Gemini Scout ⚡")
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
         if listing.image_url.startswith("http"):
@@ -151,8 +152,14 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
         embed.add_embed_field(name="🤖 AI Reason", value=analysis.reasoning[:1000], inline=False)
         webhook.add_embed(embed)
-        webhook.execute()
-        time.sleep(2) # Prevent Discord spam blocks
+        
+        # 🔥 Safety wait to prevent webhook rejection
+        time.sleep(2)
+        try:
+            webhook.execute()
+            print("[DISCORD] Ping successful!", flush=True)
+        except Exception as e:
+            print(f"[DISCORD] Send failed: {e}", flush=True)
 
 def scout_loop():
     while True:
@@ -163,7 +170,6 @@ def scout_loop():
                 profitable = analyse_all_gemini(listings)
                 if profitable: 
                     send_discord_notification(profitable)
-                    print(f"[SCOUT] Sent {len(profitable)} alerts.", flush=True)
         except Exception as exc: print(f"[SCOUT] Error: {exc}", flush=True)
         time.sleep(SCAN_INTERVAL_SECONDS)
 
