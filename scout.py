@@ -1,3 +1,6 @@
+"""
+Arbitrage Scout Bot - 2026 Stable Release
+"""
 import json
 import os
 import re
@@ -5,6 +8,8 @@ import random
 import threading
 import time
 from dataclasses import dataclass
+from typing import Optional
+
 from google import genai
 from google.genai import types
 import requests
@@ -16,11 +21,11 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return jsonify({"status": "alive", "bot": "Gemini Arbitrage Scout ⚡"}), 200
+    return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   
+MIN_NET_PROFIT = -100.0   # Force-send every item for initial testing
 FEE_RATE = 0.15
 NUM_LISTINGS = 12
 SCAN_INTERVAL_SECONDS = 300 
@@ -49,7 +54,7 @@ def scrape_ebay_listings() -> list[Listing]:
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
-    # 🔥 FIX: Removed 'ultra_slow' to prevent 499 timeouts; added 'render=true' for reliability
+    # Using 'render=true' to ensure full mobile content is captured
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
     
     print(f"[SCRAPER] Fetching '{current_keyword}' via Mobile Proxy...", flush=True)
@@ -58,7 +63,7 @@ def scrape_ebay_listings() -> list[Listing]:
         response = requests.get(proxy_url, timeout=60)
         response.raise_for_status()
     except Exception as exc:
-        print(f"[SCRAPER] Proxy failed: {exc}", flush=True)
+        print(f"[SCRAPER] Connection error: {exc}", flush=True)
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -75,10 +80,10 @@ def scrape_ebay_listings() -> list[Listing]:
             item_url = link_el["href"].split("?")[0]
             if item_url in SEEN_ITEMS: continue
             
+            # Universal content grabber
             texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
-            title = texts[0] if texts else "Unknown Item"
-            if "shop on ebay" in title.lower(): continue
-
+            title = texts[0] if texts else "Item Name Missing"
+            
             price_text = "1.0"
             for s in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
                 price_text = s
@@ -99,14 +104,10 @@ def scrape_ebay_listings() -> list[Listing]:
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: 
-        print("[AI] Missing API Key", flush=True)
-        return []
+    if not api_key: return []
 
-    # Initialize the 2026 Gen AI Client
     client = genai.Client(api_key=api_key)
-    
-    payload = ["Identify these items. Estimate resale value on Vinted. Check for damage in photos.\n"]
+    payload = ["Analyze resale value. Return strictly valid JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url and l.image_url.startswith("http"):
@@ -116,29 +117,19 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                     payload.append(types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg"))
             except: pass
 
-    payload.append("\nReturn JSON array only: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
+    payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
     
     try:
-        # 🔥 THE ABSOLUTE FIX: Exact string format for 2026 SDK
+        # 🔥 FIX: 2026 Standard Model ID
         response = client.models.generate_content(
-            model='gemini-1.5-flash', 
+            model='gemini-2.0-flash', 
             contents=payload,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1
-            )
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
-        
-        if not response or not response.text:
-            print("[AI] Empty response from Gemini", flush=True)
-            return []
-            
         items_data = json.loads(response.text)
-        
     except Exception as e:
-        # Handle the 429 quota limit we saw in your previous logs
         if "429" in str(e):
-            print("[AI] Quota full. Sleeping 60s...", flush=True)
+            print("[AI] Quota hit. Sleeping 60s...", flush=True)
             time.sleep(60)
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
@@ -146,7 +137,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     profitable = []
     for entry in items_data:
         try:
-            # Safe ID extraction (handles '1' or 'Item 1')
+            # Safe ID parser to handle "Item 1" or 1
             raw_id = str(entry.get("id", "0"))
             clean_id = int(re.search(r'\d+', raw_id).group())
             idx = clean_id - 1
@@ -155,8 +146,6 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
-                
-                # Currently set to -100 to force the Discord ping
                 if profit >= MIN_NET_PROFIT:
                     profitable.append(ProfitAnalysis(
                         listing=l, resale_price=resale, fees=round(resale*FEE_RATE, 2),
@@ -172,12 +161,12 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         listing = analysis.listing
         webhook = DiscordWebhook(url=webhook_url, username="Gemini Scout ⚡")
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
-        if listing.image_url and listing.image_url.startswith("http"):
+        if listing.image_url.startswith("http"):
             embed.set_thumbnail(url=listing.image_url)
         embed.add_embed_field(name="🔥 Flip Score", value=f"**{analysis.score}/100**", inline=False)
         embed.add_embed_field(name="🏷️ Buy Price", value=f"**{listing.price:.2f} €**", inline=True)
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
-        embed.add_embed_field(name="🤖 Reasoning", value=analysis.reasoning[:1000], inline=False)
+        embed.add_embed_field(name="🤖 AI Reason", value=analysis.reasoning[:1000], inline=False)
         webhook.add_embed(embed)
         webhook.execute()
         time.sleep(1)
