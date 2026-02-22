@@ -79,23 +79,20 @@ def send_alert_to_discord(message: str):
 def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     # 🔥 FIX: Force the price to be a clean integer in the URL to prevent eBay errors
-    search_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&_ipg=60&rt=nc"
+    scraper_key = os.getenv("SCRAPER_API_KEY", "")
     
-    print(f"[SCRAPER] Fetching '{current_keyword}' (max {MAX_BUY_PRICE} €) …", flush=True)
+    # 🔥 Switch to eBay Austria for local deals
+    ebay_url = f"https://www.ebay.at/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&_ipg=60&rt=nc"
     
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
-        # 🔥 FIX: Inject fake cookies to bypass the EU Consent Wall
-        "Cookie": "dp1=bpf=%5E; s=CgAD4ACBmZqNiZmM0NTE5YjM0MWE5Njk2MzM4ZThlZmZmZmZkMGFhZg==;" 
-    }
-
+    # 🔥 Route the request through the automated proxy
+    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}"
+    
+    print(f"[SCRAPER] Fetching '{current_keyword}' via Proxy …", flush=True)
+    
     try:
-        response = requests.get(search_url, headers=headers, timeout=30)
+        # 🔥 Drop the fake headers, the proxy handles all Captchas automatically
+        response = requests.get(proxy_url, timeout=45)
         response.raise_for_status()
-    except requests.RequestException as exc:
-        print(f"[SCRAPER] Request failed: {exc}", flush=True)
-        return []
 
     soup = BeautifulSoup(response.text, "html.parser")
     
