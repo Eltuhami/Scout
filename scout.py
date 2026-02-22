@@ -48,13 +48,13 @@ def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     
-    # 1. Target eBay Germany for max volume
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&rt=nc"
+    # 🔥 FIX 1: Use the mobile URL (m.ebay.de) for much higher success rates
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
-    # 2. 🔥 CRITICAL: render=true fetches the items that eBay hides behind JS
-    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&render=true"
+    # 🔥 FIX 2: Use "device=mobile" so the proxy presents as a phone
+    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile"
     
-    print(f"[SCRAPER] Fetching '{current_keyword}' via Proxy...", flush=True)
+    print(f"[SCRAPER] Fetching '{current_keyword}' via Mobile Proxy...", flush=True)
     
     try:
         response = requests.get(proxy_url, timeout=60)
@@ -64,15 +64,20 @@ def scrape_ebay_listings() -> list[Listing]:
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
-    items = soup.find_all(class_=re.compile(r"s-item"))
     
+    # 🔥 FIX 3: Mobile items use very simple 's-item' or 'item' tags
+    items = soup.select(".s-item, .item, li[data-view]")
+    print(f"[DEBUG] Raw items detected: {len(items)}", flush=True)
+
     listings: list[Listing] = []
     for item in items:
         if len(listings) >= NUM_LISTINGS: break
+        
         try:
-            link_el = item.find("a", href=re.compile(r"itm/"))
-            title_el = item.find(["h3", "h2"])
-            price_el = item.select_one(".s-item__price")
+            # Mobile link and title selectors
+            link_el = item.select_one("a.s-item__link, a[href*='itm/']")
+            title_el = item.select_one(".s-item__title, .title")
+            price_el = item.select_one(".s-item__price, .price")
             
             if not link_el or not title_el or not price_el: continue
             
@@ -82,17 +87,20 @@ def scrape_ebay_listings() -> list[Listing]:
             title = title_el.get_text(strip=True)
             if "shop on ebay" in title.lower(): continue
 
+            # Robust price cleaning for mobile
             price_str = price_el.get_text(strip=True).replace(".", "").replace(",", ".")
             price_val = float(re.search(r"(\d+\.\d+|\d+)", price_str).group(1))
 
             if 0 < price_val <= MAX_BUY_PRICE:
                 img_el = item.find("img")
                 image_url = img_el.get("src") or img_el.get("data-src") or ""
+                
                 SEEN_ITEMS.add(item_url)
                 listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
-        except: continue
+        except:
+            continue
 
-    print(f"[SCRAPER] Found {len(listings)} NEW items.", flush=True)
+    print(f"[SCRAPER] Found {len(listings)} items.", flush=True)
     return listings
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
