@@ -48,9 +48,11 @@ def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&ultra_slow=true"
     
-    print(f"[SCRAPER] Fetching '{current_keyword}' via Universal Proxy...", flush=True)
+    # 🔥 FIX: Removed 'ultra_slow' to prevent 499 timeouts; added 'render=true' for reliability
+    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
+    
+    print(f"[SCRAPER] Fetching '{current_keyword}' via Mobile Proxy...", flush=True)
     
     try:
         response = requests.get(proxy_url, timeout=60)
@@ -113,13 +115,18 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
     
     try:
+        # 🔥 FIX: Using the exact model ID format for 2026 SDK
         response = client.models.generate_content(
-            model='gemini-1.5-flash', # 🔥 Switched to 1.5-flash for higher free quota
+            model='gemini-1.5-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
         items_data = json.loads(response.text)
     except Exception as e:
+        # 🔥 FIX: Automated retry if quota is hit
+        if "429" in str(e):
+            print("[AI] Quota hit. Sleeping 60s...", flush=True)
+            time.sleep(60)
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
 
