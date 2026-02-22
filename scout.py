@@ -101,8 +101,10 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return []
 
+    # 2026 SDK Client initialization
     client = genai.Client(api_key=api_key)
-    payload = ["Analyze resale value. Return strictly valid JSON array.\n"]
+    payload = ["Analyze resale value for Vinted. Look for defects in photos.\n"]
+    
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url:
@@ -112,10 +114,10 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                     payload.append(types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg"))
             except: pass
 
-    payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 80}]")
+    payload.append("\nReturn JSON array: [{'id', 'resale_price', 'reasoning', 'score'}]")
     
     try:
-        # 🔥 FIX: Using the exact model ID format for 2026 SDK
+        # 🔥 FIX: Exact model name for 2026 SDK to avoid 404
         response = client.models.generate_content(
             model='gemini-1.5-flash', 
             contents=payload,
@@ -123,9 +125,9 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
         )
         items_data = json.loads(response.text)
     except Exception as e:
-        # 🔥 FIX: Automated retry if quota is hit
+        # 🔥 FIX: Handle the '429 Quota' error by sleeping the bot
         if "429" in str(e):
-            print("[AI] Quota hit. Sleeping 60s...", flush=True)
+            print("[AI] Quota hit! Sleeping 60s...", flush=True)
             time.sleep(60)
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
@@ -133,13 +135,17 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     profitable = []
     for entry in items_data:
         try:
+            # Robust ID cleaning for 'Item 1' or '1'
             raw_id = str(entry.get("id", "0"))
             clean_id = int(re.search(r'\d+', raw_id).group())
             idx = clean_id - 1
+            
             if 0 <= idx < len(listings):
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
+                
+                # Check against your profit threshold (currently set to -100 for testing)
                 if profit >= MIN_NET_PROFIT:
                     profitable.append(ProfitAnalysis(
                         listing=l, resale_price=resale, fees=round(resale*FEE_RATE, 2),
