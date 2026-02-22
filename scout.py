@@ -101,43 +101,59 @@ def scrape_ebay_listings() -> list[Listing]:
     page_title = soup.title.get_text(strip=True) if soup.title else "No Title Found"
     print(f"[DEBUG] eBay Page Title: {page_title}", flush=True)
 
-    if any(warn in response.text.lower() for warn in ["captcha", "pardon our interruption", "security measure"]):
-        print("!!! [ALERT] eBay Captcha triggered !!!", flush=True)
-        send_alert_to_discord("🚨 **eBay Security Block!** The bot hit a Captcha via proxy.")
-        return []
+    # 🔥 FIX 1: Use a more flexible selector to find items
+    items = soup.select(".s-item__wrapper, .s-item, li[data-view='mi:1686|iid:1']")
+    print(f"[DEBUG] Raw items found on page: {len(items)}", flush=True)
 
-    items = soup.select("li.s-item")
     listings: list[Listing] = []
 
     for item in items:
         if len(listings) >= NUM_LISTINGS: break
         
+        # 1. Get the link and title
         link_el = item.select_one("a.s-item__link")
-        item_url = link_el["href"] if link_el else ""
-        clean_url = item_url.split("?")[0] if item_url else ""
+        title_el = item.select_one(".s-item__title, h3")
         
-        if not clean_url or clean_url in SEEN_ITEMS: continue
-
-        title_el = item.select_one(".s-item__title")
-        if not title_el: continue
+        if not link_el or not title_el: continue
+        
+        item_url = link_el["href"].split("?")[0]
         title = title_el.get_text(strip=True)
-        if title.lower() in ("shop on ebay", "ergebnisse", ""): continue
+        
+        # Skip eBay placeholders
+        if any(x in title.lower() for x in ["shop on ebay", "ergebnisse", "neue anzeige"]): 
+            continue
+        
+        # 2. Skip if already seen
+        if item_url in SEEN_ITEMS: continue
 
+        # 3. Get the price with more robust cleaning
         price_el = item.select_one(".s-item__price")
         if not price_el: continue
-        price_match = re.search(r"([\d]+[.,]?\d*)", price_el.get_text(strip=True).replace(".", "").replace(",", "."))
-        if not price_match: continue
-        price = float(price_match.group(1))
+        
+        # Remove currency symbols and handle European number formatting
+        raw_price = price_el.get_text(strip=True).replace("EUR", "").replace("€", "").strip()
+        # Handle 1.200,50 -> 1200.50
+        clean_price = raw_price.replace(".", "").replace(",", ".")
+        
+        try:
+            price_match = re.search(r"(\d+\.?\d*)", clean_price)
+            if not price_match: continue
+            price = float(price_match.group(1))
+        except ValueError:
+            continue
+
         if price <= 0 or price > MAX_BUY_PRICE: continue
 
+        # 4. Get the image
         img_el = item.select_one(".s-item__image-wrapper img")
-        image_url = img_el.get("src", "") or img_el.get("data-src", "") or "" if img_el else ""
+        image_url = ""
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src") or ""
 
-        SEEN_ITEMS.add(clean_url)
+        SEEN_ITEMS.add(item_url)
         listings.append(Listing(title=title, price=price, image_url=image_url, item_url=item_url))
 
-    if len(SEEN_ITEMS) > 1000: SEEN_ITEMS.clear()
-    print(f"[SCRAPER] Found {len(listings)} NEW listing(s).", flush=True)
+    print(f"[SCRAPER] Found {len(listings)} NEW listing(s) after filtering.", flush=True)
     return listings
 
 def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
