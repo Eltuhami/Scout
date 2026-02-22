@@ -1,5 +1,5 @@
 """
-Arbitrage Scout Bot - 2026 Gemini High-Speed Edition
+Arbitrage Scout Bot - 2026 Gemini High-Speed Edition (Discord Fix)
 """
 
 import json
@@ -18,7 +18,6 @@ from bs4 import BeautifulSoup
 from discord_webhook import DiscordEmbed, DiscordWebhook
 from flask import Flask, jsonify
 
-# ─── Flask App for Render ────────────────────────────────────────────────────────
 app = Flask(__name__)
 
 @app.route("/")
@@ -27,14 +26,12 @@ def index():
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = 0.0     # Set to 0.0 for diagnostic mode
+MIN_NET_PROFIT = -100.0   # 🔥 Set low to force-send every item to Discord for testing
 FEE_RATE = 0.15
 NUM_LISTINGS = 12
 SCAN_INTERVAL_SECONDS = 300 
 
-# High-volume diagnostic keywords to guarantee a first result
 SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "Pokemon Karten", "GoPro"]
-
 SEEN_ITEMS = set()
 
 @dataclass
@@ -56,8 +53,6 @@ class ProfitAnalysis:
 def scrape_ebay_listings() -> list[Listing]:
     current_keyword = random.choice(SEARCH_KEYWORDS)
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    
-    # 1. Target eBay.de Mobile
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={current_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&ultra_slow=true"
     
@@ -71,29 +66,23 @@ def scrape_ebay_listings() -> list[Listing]:
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
-    
-    # 🔥 UNIVERSAL SELECTOR: Find anything that might be an item container
     items = soup.find_all(["li", "div"], class_=re.compile(r"item|s-item|result"))
     print(f"[DEBUG] Containers found: {len(items)}", flush=True)
 
     listings: list[Listing] = []
-    for i, item in enumerate(items):
+    for item in items:
         if len(listings) >= NUM_LISTINGS: break
-        
         try:
-            # 🔥 UNIVERSAL LINK: Find the first link containing "itm/"
             link_el = item.find("a", href=re.compile(r"itm/"))
             if not link_el: continue
             
             item_url = link_el["href"].split("?")[0]
             if item_url in SEEN_ITEMS: continue
             
-            # 🔥 UNIVERSAL TITLE: Grab the longest text element in the container
             texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
             title = texts[0] if texts else "Unknown Item"
             if "shop on ebay" in title.lower(): continue
 
-            # 🔥 UNIVERSAL PRICE: Find any text with a currency symbol or "EUR"
             price_text = "1.0"
             for s in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
                 price_text = s
@@ -107,10 +96,7 @@ def scrape_ebay_listings() -> list[Listing]:
             
             listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
             SEEN_ITEMS.add(item_url)
-            
-        except Exception as e:
-            if i == 0: print(f"[DEBUG] First item error: {e}", flush=True)
-            continue
+        except: continue
 
     print(f"[SCRAPER] Successfully parsed {len(listings)} items.", flush=True)
     return listings
@@ -120,9 +106,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    # 🔥 Updated Prompt for stricter ID response
-    payload = ["Evaluate these items for resale. Return strictly valid JSON.\n"]
-    
+    payload = ["Analyze resale value. Return strictly valid JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url:
@@ -136,7 +120,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     
     try:
         response = client.models.generate_content(
-            model='gemini-2.0-flash', 
+            model='gemini-2.0-flash',
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
@@ -148,7 +132,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     profitable = []
     for entry in items_data:
         try:
-            # 🔥 FIX: Robust ID cleaning (handles 'Item 1' or 1)
+            # 🔥 FIX: Robust ID parser handles 'Item 1' or just 1
             raw_id = str(entry.get("id", "0"))
             clean_id = int(re.search(r'\d+', raw_id).group())
             idx = clean_id - 1
@@ -172,11 +156,8 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         listing = analysis.listing
         webhook = DiscordWebhook(url=webhook_url, username="Gemini Scout ⚡")
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
-        
-        # 🔥 FIX: Ensure image URL is valid for Discord
         if listing.image_url and listing.image_url.startswith("http"):
             embed.set_thumbnail(url=listing.image_url)
-            
         embed.add_embed_field(name="🔥 Flip Score", value=f"**{analysis.score}/100**", inline=False)
         embed.add_embed_field(name="🏷️ Buy Price", value=f"**{listing.price:.2f} €**", inline=True)
         embed.add_embed_field(name="✅ Net Profit", value=f"**{analysis.net_profit:.2f} €**", inline=True)
@@ -184,6 +165,7 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         webhook.add_embed(embed)
         webhook.execute()
         time.sleep(1)
+
 def scout_loop():
     while True:
         try:
@@ -194,13 +176,10 @@ def scout_loop():
                 if profitable: 
                     send_discord_notification(profitable)
                     print(f"[SCOUT] Sent {len(profitable)} alerts.", flush=True)
-        except Exception as exc: 
-            print(f"[SCOUT] Global Error: {exc}", flush=True)
+        except Exception as exc: print(f"[SCOUT] Error: {exc}", flush=True)
         time.sleep(SCAN_INTERVAL_SECONDS)
 
-# Start background thread
 threading.Thread(target=scout_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    # Render requires binding to 0.0.0.0 and port 10000
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
