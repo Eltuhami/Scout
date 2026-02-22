@@ -20,9 +20,9 @@ def index():
 
 # ─── 2026 Stable Configuration ──────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   
+MIN_NET_PROFIT = -100.0   # Testing mode: sends everything
 FEE_RATE = 0.15
-NUM_LISTINGS = 1         # One item per cycle to stay safe on free tier
+NUM_LISTINGS = 1         # 🔥 CRITICAL: Process 1 per cycle to avoid 429 errors
 SCAN_INTERVAL_SECONDS = 300 
 
 SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
@@ -97,7 +97,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    payload = ["Analyze resale value for Vinted. Return JSON array.\n"]
+    payload = ["Identify item resale value. Return strictly JSON.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url.startswith("http"):
@@ -106,9 +106,9 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 SWITCHED TO LITE MODEL FOR HIGHER QUOTA
+        # 🔥 THE SOLUTION: Using the standard 1.5-flash ID for 2026 stability
         response = client.models.generate_content(
-            model='gemini-2.0-flash-lite-preview-02-05', 
+            model='gemini-1.5-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
@@ -143,7 +143,7 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
     if not webhook_url: return
     for analysis in analyses:
         listing = analysis.listing
-        print(f"[DISCORD] Attempting to send: {listing.title[:30]}", flush=True)
+        print(f"[DISCORD] Sending ping for: {listing.title[:30]}", flush=True)
         webhook = DiscordWebhook(url=webhook_url, username="Gemini Scout ⚡")
         embed = DiscordEmbed(title=f"💰 {listing.title[:200]}", url=listing.item_url, color="00FFAA")
         if listing.image_url.startswith("http"):
@@ -162,7 +162,7 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
 def scout_loop():
     while True:
         try:
-            print(f"\n--- [⚡] Gemini Bot awake. Time: {time.strftime('%H:%M:%S')} ---", flush=True)
+            print(f"\n--- [⚡] Gemini Bot awake. ---", flush=True)
             listings = scrape_ebay_listings()
             if listings:
                 profitable = analyse_all_gemini(listings)
