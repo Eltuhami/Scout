@@ -18,7 +18,7 @@ app = Flask(__name__)
 def index():
     return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
-# ─── 2026 Stable Configuration ──────────────────────────────────────────────────
+# ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
 MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
@@ -100,13 +100,19 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload = ["Analyze resale value for Vinted. Return JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
+        
+        # 🔥 THE FIX: Download the image first, then send bytes to Gemini
         if l.image_url.startswith("http"):
-            payload.append(types.Part.from_uri(file_uri=l.image_url, mime_type="image/jpeg"))
+            try:
+                img_resp = requests.get(l.image_url, timeout=5)
+                if img_resp.status_code == 200:
+                    payload.append(types.Part.from_bytes(data=img_resp.content, mime_type="image/jpeg"))
+            except Exception as e:
+                print(f"[AI] Skipping image fetch: {e}", flush=True)
 
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 THE ONLY MODEL: Fixed for 2026 quota stability
         response = client.models.generate_content(
             model='gemini-2.5-flash', 
             contents=payload,
@@ -115,8 +121,8 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
         items_data = json.loads(response.text)
     except Exception as e:
         if "429" in str(e):
-            print("[AI] Quota hit. Sleeping 65s...", flush=True)
-            time.sleep(65) 
+            print("[AI] Quota hit. Sleeping 60s...", flush=True)
+            time.sleep(60) 
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
 
