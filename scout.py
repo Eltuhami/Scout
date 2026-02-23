@@ -20,7 +20,6 @@ def index():
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
 NUM_LISTINGS = 1         
 SCAN_INTERVAL_SECONDS = 300 
@@ -74,13 +73,23 @@ def scrape_ebay_listings() -> list[Listing]:
             texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
             title = texts[0] if texts else "Unknown Item"
             
-            price_text = "1.0"
-            for s in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
-                price_text = s
-                break
+            # 🔥 THE PRICE FIX: Strictly target the exact price span
+            price_el = item.find(class_="s-item__price")
+            if not price_el: continue
+            price_text = price_el.get_text(strip=True)
             
-            price_clean = re.sub(r'[^\d.,]', '', price_text).replace('.', '').replace(',', '.')
-            price_val = float(re.search(r"(\d+\.\d+|\d+)", price_clean).group(1))
+            # Clean German formatting (e.g., "EUR 1.250,00" -> 1250.00)
+            price_clean = price_text.replace("EUR", "").replace("€", "").strip()
+            if ',' in price_clean and '.' in price_clean:
+                if price_clean.rfind(',') > price_clean.rfind('.'):
+                    price_clean = price_clean.replace('.', '').replace(',', '.')
+                else:
+                    price_clean = price_clean.replace(',', '')
+            elif ',' in price_clean:
+                price_clean = price_clean.replace(',', '.')
+                
+            match = re.search(r"(\d+\.\d+|\d+)", price_clean)
+            price_val = float(match.group(1)) if match else 0.0
 
             img_el = item.find("img")
             image_url = img_el.get("src") or img_el.get("data-src") or ""
@@ -101,7 +110,6 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         
-        # 🔥 Pre-fetch image to avoid Google server blocks
         if l.image_url.startswith("http"):
             try:
                 img_resp = requests.get(l.image_url, timeout=5)
@@ -112,7 +120,6 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
 
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
-    # 🔥 The Retry Loop & X-Ray Vision Fix
     max_retries = 3
     delay = 5
     items_data = []
@@ -124,7 +131,6 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                 contents=payload,
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
             )
-            # 🔥 Prints the AI's raw math and thoughts directly to your Render logs
             print(f"[AI] Raw Output: {response.text}", flush=True) 
             items_data = json.loads(response.text)
             break 
@@ -153,17 +159,23 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
-                if profit >= MIN_NET_PROFIT:
-                    profitable.append(ProfitAnalysis(
-                        listing=l, resale_price=resale, net_profit=round(profit, 2),
-                        reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
-                    ))
+                
+                # 🔥 ALWAYS PING DISCORD AND LOG THE MATH
+                print(f"[DEBUG] Calculated Net Profit: {profit} € for item priced at {l.price} €", flush=True)
+                profitable.append(ProfitAnalysis(
+                    listing=l, resale_price=resale, net_profit=round(profit, 2),
+                    reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
+                ))
         except: continue
     return profitable
 
 def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
     webhook_url = os.getenv("DISCORD_WEBHOOK", "")
-    if not webhook_url: return
+    
+    if not webhook_url: 
+        print("[DISCORD] ❌ ERROR: DISCORD_WEBHOOK environment variable is missing!", flush=True)
+        return
+        
     for analysis in analyses:
         listing = analysis.listing
         print(f"[DISCORD] Sending ping for: {listing.title[:30]}", flush=True)
@@ -178,9 +190,9 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
         
         try:
             webhook.execute()
-            print("[DISCORD] Ping successful!", flush=True)
+            print("[DISCORD] ✅ Ping successful!", flush=True)
         except Exception as e:
-            print(f"[DISCORD] Send failed: {e}", flush=True)
+            print(f"[DISCORD] ❌ Send failed: {e}", flush=True)
 
 def scout_loop():
     while True:
