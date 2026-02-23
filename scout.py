@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# 🔥 Use exactly "gemini-1.5-flash" to fix the SDK 404 error
+# 🔥 FIXED: Use exactly "gemini-1.5-flash" to fix the 404 SDK error
 MODEL_NAME = "gemini-1.5-flash" 
 # ────────────────────────────────────────────────────────────────────────
 
@@ -46,7 +46,6 @@ def save_history(item_url):
 def get_dynamic_keyword(client):
     prompt = f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the keyword."
     try:
-        # The new SDK automatically handles the 'models/' prefix
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
         print(f"[SEARCH] AI Keyword: {keyword}", flush=True)
@@ -63,7 +62,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
-        # Target specific eBay listing containers to avoid menu text
+        # Target specific eBay containers to avoid menu text like 'Altersempfehlung'
         items = soup.find_all("div", class_="s-item__info")
         
         listings = []
@@ -73,7 +72,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 title_el = item.find("div", class_="s-item__title") or item.find("h3")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 TRASH FILTER: Skip eBay navigation, UI text, and empty titles
+                # 🚮 TRASH FILTER: Skip eBay navigation and UI text
                 trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
                 if not title or any(x in title.lower() for x in trash) or "neues angebot" in title.lower():
                     continue
@@ -90,7 +89,6 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 price_val = float(match.group(1)) if match else 0.0
                 
                 if 0 < price_val <= MAX_BUY_PRICE:
-                    # Look for image in the wrapper adjacent to info
                     img_container = item.parent.find("div", class_="s-item__image-wrapper")
                     img = img_container.find("img") if img_container else None
                     img_url = img.get("src") or img.get("data-src") or "" if img else ""
