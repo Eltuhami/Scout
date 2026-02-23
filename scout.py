@@ -11,8 +11,8 @@ from bs4 import BeautifulSoup
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# Use exact ID; the SDK handles the 'models/' prefix internally
-MODEL_NAME = "gemini-1.5-flash" 
+# 🔥 SWITCHED: Using the ultra-stable Pro model to kill the 404 error
+MODEL_NAME = "gemini-pro" 
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
@@ -38,7 +38,6 @@ def save_history(item_url):
 def get_dynamic_keyword(client):
     prompt = f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the keyword."
     try:
-        # No 'models/' prefix needed for this specific SDK call
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
         print(f"[SEARCH] AI Keyword: {keyword}", flush=True)
@@ -55,7 +54,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
-        # 🎯 TARGET ONLY REAL PRODUCT BOXES
+        # 🎯 Targeted selector for real items only
         items = soup.find_all("div", class_="s-item__info")
         
         listings = []
@@ -65,7 +64,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 title_el = item.find("div", class_="s-item__title") or item.find("h3")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 TRASH FILTER
+                # 🚮 TRASH FILTER: Skips pagination/menus found in your logs
                 trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
                 if not title or any(x in title.lower() for x in trash):
                     continue
@@ -93,20 +92,14 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
 def analyse_all_gemini(listings: list[Listing], client) -> list:
     profitable_deals = []
     for l in listings:
-        print(f"[AI] Analyzing real item: {l.title}...", flush=True)
+        print(f"[AI] Analyzing: {l.title}...", flush=True)
+        # Note: gemini-pro (text-only) is used for keyword/price analysis here
         prompt = f"Estimate resale for '{l.title}' at {l.price}€. Return JSON: [{{'resale_price': 35.0, 'reasoning': '...', 'score': 85}}]"
         
-        payload = [prompt]
-        if l.image_url and l.image_url.startswith("http"):
-            try:
-                img_data = requests.get(l.image_url, timeout=5).content
-                payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
-            except: pass
-
         try:
             response = client.models.generate_content(
                 model=MODEL_NAME, 
-                contents=payload, 
+                contents=prompt, 
                 config=types.GenerateContentConfig(response_mime_type="application/json")
             )
             data = json.loads(response.text)
@@ -125,7 +118,6 @@ if __name__ == "__main__":
     print("--- [START] Bot Active ---", flush=True)
     api_key = os.getenv("GEMINI_API_KEY", "")
     if api_key:
-        # Force the stable version
         client = genai.Client(api_key=api_key)
         seen = load_history()
         keyword = get_dynamic_keyword(client)
