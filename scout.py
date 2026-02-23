@@ -101,7 +101,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         
-        # 🔥 THE FIX: Download the image first, then send bytes to Gemini
+        # 🔥 Pre-fetch image to avoid Google server blocks
         if l.image_url.startswith("http"):
             try:
                 img_resp = requests.get(l.image_url, timeout=5)
@@ -112,19 +112,36 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
 
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash', 
-            contents=payload,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
-        )
-        items_data = json.loads(response.text)
-    except Exception as e:
-        if "429" in str(e):
-            print("[AI] Quota hit. Sleeping 60s...", flush=True)
-            time.sleep(60) 
-        print(f"[AI] Gemini Error: {e}", flush=True)
-        return []
+    # 🔥 The Retry Loop & X-Ray Vision Fix
+    max_retries = 3
+    delay = 5
+    items_data = []
+    
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash', 
+                contents=payload,
+                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+            )
+            # 🔥 Prints the AI's raw math and thoughts directly to your Render logs
+            print(f"[AI] Raw Output: {response.text}", flush=True) 
+            items_data = json.loads(response.text)
+            break 
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "503" in error_msg:
+                print(f"[AI] Server overloaded (503). Retrying in {delay} seconds... (Attempt {attempt + 1}/{max_retries})", flush=True)
+                time.sleep(delay)
+                delay *= 2 
+            elif "429" in error_msg:
+                print("[AI] Quota hit. Sleeping 60s...", flush=True)
+                time.sleep(60)
+                break 
+            else:
+                print(f"[AI] Gemini Error: {e}", flush=True)
+                return []
 
     profitable = []
     for entry in items_data:
