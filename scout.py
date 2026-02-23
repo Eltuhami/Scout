@@ -108,7 +108,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     try:
         # 🔥 THE ONLY MODEL: Fixed for 2026 quota stability
         response = client.models.generate_content(
-            model='gemini-2.0-flash', 
+            model='gemini-2.5-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
