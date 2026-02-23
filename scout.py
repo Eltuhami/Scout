@@ -10,9 +10,9 @@ import requests
 from bs4 import BeautifulSoup
 
 # ─── EDIT ONLY THESE VARIABLES ──────────────────────────────────────────
-MAX_BUY_PRICE = 16.0  # Your current bank balance
+MAX_BUY_PRICE = 16.0  # Current bank balance
 MIN_NET_PROFIT = 5.0  # Min profit after 15% fees
-NUM_LISTINGS = 3      
+NUM_LISTINGS = 1      # Set to 1 to avoid hitting Free Tier quotas
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
@@ -44,6 +44,7 @@ def save_history(item_url):
         f.write(item_url + "\n")
 
 def get_dynamic_keyword(client):
+    """AI Brain: Picks a realistic niche for your budget."""
     prompt = (
         f"You are a professional reseller. My current budget is {MAX_BUY_PRICE}€. "
         f"Suggest ONE specific item or brand that is REALISTICALLY found for under {MAX_BUY_PRICE}€ "
@@ -52,8 +53,11 @@ def get_dynamic_keyword(client):
     )
     try:
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-        return response.text.strip().replace("'", "").replace('"', "")
-    except:
+        keyword = response.text.strip().replace("'", "").replace('"', "")
+        print(f"[AI] Dynamic Search Keyword: {keyword}", flush=True)
+        return keyword
+    except Exception as e:
+        print(f"[AI] Keyword Error: {e}", flush=True)
         return "Lego Minifigure"
 
 def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
@@ -61,10 +65,12 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
     
+    print(f"[SCRAPER] Fetching '{keyword}'...", flush=True)
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
         items = soup.find_all(["li", "div"], class_=re.compile(r"item|s-item|result"))
+        print(f"[DEBUG] Containers found: {len(items)}", flush=True)
         
         listings = []
         for item in items:
@@ -74,12 +80,11 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 if not link_el: continue
                 
                 item_url = link_el["href"].split("?")[0]
-                if item_url in seen_items: continue # 🔥 Skip already pinged items
+                if item_url in seen_items: continue
                 
                 title_el = item.find("h3") or item.find("h2")
                 title = title_el.get_text(strip=True).replace("Neues Angebot", "") if title_el else "Unknown"
                 
-                # Price extraction logic
                 price_val = 0.0
                 for el in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
                     t = el.get_text(strip=True)
@@ -95,16 +100,73 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                     img_url = img.get("src") or img.get("data-src") or ""
                     listings.append(Listing(title=title, price=price_val, image_url=img_url, item_url=item_url))
             except: continue
+        print(f"[SCRAPER] Successfully parsed {len(listings)} items.", flush=True)
         return listings
-    except: return []
+    except Exception as e:
+        print(f"[SCRAPER] Error: {e}", flush=True)
+        return []
 
-# ... (analyse_all_gemini and send_discord_notification stay the same)
+def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
+    """Optimized for Free Tier: Removed image processing to save tokens/quota."""
+    payload = ["Analyze resale value for Vinted. Return JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]"]
+    for i, l in enumerate(listings, 1):
+        payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.0-flash', 
+            contents=payload,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+        )
+        items_data = json.loads(response.text)
+        
+        profitable = []
+        for entry in items_data:
+            idx = int(entry.get("id", 1)) - 1
+            if 0 <= idx < len(listings):
+                l = listings[idx]
+                resale = float(entry.get("resale_price", 0))
+                profit = (resale * (1 - FEE_RATE)) - l.price
+                if profit >= MIN_NET_PROFIT:
+                    profitable.append(ProfitAnalysis(
+                        listing=l, resale_price=resale, net_profit=round(profit, 2),
+                        reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
+                    ))
+        return profitable
+    except Exception as e:
+        if "429" in str(e):
+            print("[AI] Quota hit. Ending this run to stay safe.", flush=True)
+        return []
+
+def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
+    webhook_url = os.getenv("DISCORD_WEBHOOK", "")
+    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
+
+    for analysis in analyses:
+        l = analysis.listing
+        payload = {
+            "username": "Gemini Scout ⚡",
+            "embeds": [{
+                "title": f"💰 {l.title[:200]}",
+                "url": l.item_url,
+                "color": 65450, 
+                "thumbnail": {"url": l.image_url} if l.image_url else {},
+                "fields": [
+                    {"name": "🏷️ Buy Price", "value": f"**{l.price:.2f} €**", "inline": True},
+                    {"name": "📈 Sell Price", "value": f"**{analysis.resale_price:.2f} €**", "inline": True},
+                    {"name": "✅ Net Profit", "value": f"**{analysis.net_profit:.2f} €**", "inline": True},
+                    {"name": "⭐ Deal Score", "value": f"**{analysis.score}/100**", "inline": True},
+                    {"name": "🤖 AI Reason", "value": analysis.reasoning[:1000], "inline": False}
+                ]
+            }]
+        }
+        requests.post(webhook_url, json=payload, headers=headers)
 
 if __name__ == "__main__":
     api_key = os.getenv("GEMINI_API_KEY", "")
     if api_key:
         client = genai.Client(api_key=api_key)
-        seen_items = load_history() # 🔥 Load memory
+        seen_items = load_history()
         keyword = get_dynamic_keyword(client)
         listings = scrape_ebay_listings(keyword, seen_items)
         
@@ -113,4 +175,4 @@ if __name__ == "__main__":
             if profitable:
                 for p in profitable:
                     send_discord_notification([p])
-                    save_history(p.listing.item_url) # 🔥 Save memory
+                    save_history(p.listing.item_url)
