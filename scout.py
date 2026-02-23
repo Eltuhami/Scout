@@ -18,11 +18,11 @@ app = Flask(__name__)
 def index():
     return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
-# ─── 2026 Stable Configuration ──────────────────────────────────────────────────
+# ─── Configuration ──────────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
-MIN_NET_PROFIT = -100.0   # Testing mode: sends everything
+MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
-NUM_LISTINGS = 1         # 🔥 CRITICAL: Process 1 per cycle to avoid 429 errors
+NUM_LISTINGS = 1         
 SCAN_INTERVAL_SECONDS = 300 
 
 SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
@@ -97,7 +97,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     if not api_key: return []
 
     client = genai.Client(api_key=api_key)
-    payload = ["Identify item resale value. Return strictly JSON.\n"]
+    payload = ["Analyze resale value for Vinted. Return JSON array.\n"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
         if l.image_url.startswith("http"):
@@ -106,9 +106,9 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 THE SOLUTION: Using the standard 1.5-flash ID for 2026 stability
+        # 🔥 UPDATED TO GEMINI 3 FLASH
         response = client.models.generate_content(
-            model='gemini-1.5-flash', 
+            model='gemini-3-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
