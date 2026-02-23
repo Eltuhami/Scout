@@ -50,7 +50,7 @@ def get_dynamic_keyword(client):
         "on eBay. No consoles or phones. Return ONLY the keyword."
     )
     try:
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+        response = client.models.generate_content(model='gemini-2.5-flash-lite', contents=prompt)
         return response.text.strip().replace("'", "").replace('"', "")
     except:
         return "Lego Minifigure"
