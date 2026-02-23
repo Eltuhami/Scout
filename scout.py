@@ -11,8 +11,8 @@ from bs4 import BeautifulSoup
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# 🔥 FIXED: Use exactly "gemini-1.5-flash" to fix the 404 SDK error
-MODEL_NAME = "gemini-1.5-flash" 
+# 🔥 SWITCHED: Using Flash-8B to resolve the 404 SDK error
+MODEL_NAME = "gemini-1.5-flash-8b" 
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
@@ -52,7 +52,7 @@ def get_dynamic_keyword(client):
         return keyword
     except Exception as e:
         print(f"[ERROR] AI Keyword failed: {e}", flush=True)
-        return "Lego Star Wars"
+        return "Vintage Lego"
 
 def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
@@ -62,7 +62,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
-        # Target specific eBay containers to avoid menu text like 'Altersempfehlung'
+        # 🎯 Targeted selector to find real items and ignore the menu bar
         items = soup.find_all("div", class_="s-item__info")
         
         listings = []
@@ -72,9 +72,9 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 title_el = item.find("div", class_="s-item__title") or item.find("h3")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 TRASH FILTER: Skip eBay navigation and UI text
+                # 🚮 TRASH FILTER: Skip menus and pagination
                 trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
-                if not title or any(x in title.lower() for x in trash) or "neues angebot" in title.lower():
+                if not title or any(x in title.lower() for x in trash):
                     continue
 
                 link_el = item.find("a", class_="s-item__link")
@@ -92,13 +92,10 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                     img_container = item.parent.find("div", class_="s-item__image-wrapper")
                     img = img_container.find("img") if img_container else None
                     img_url = img.get("src") or img.get("data-src") or "" if img else ""
-                    
                     listings.append(Listing(title=title, price=price_val, image_url=img_url, item_url=item_url))
             except: continue
         return listings
-    except Exception as e:
-        print(f"[SCRAPER ERROR] {e}", flush=True)
-        return []
+    except: return []
 
 def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
     profitable_deals = []
@@ -137,12 +134,12 @@ def send_discord_notification(analyses: list[ProfitAnalysis]):
     for a in analyses:
         payload = {
             "embeds": [{
-                "title": f"💰 DEAL: {a.listing.title[:100]}", 
+                "title": f"💰 DEAL FOUND: {a.listing.title[:100]}", 
                 "url": a.listing.item_url, "color": 65450,
                 "thumbnail": {"url": a.listing.image_url},
                 "fields": [
-                    {"name": "Price", "value": f"{a.listing.price}€", "inline": True},
-                    {"name": "Profit", "value": f"{a.net_profit}€", "inline": True}
+                    {"name": "Buy", "value": f"{a.listing.price}€", "inline": True},
+                    {"name": "Profit", "value": f"**{a.net_profit}€**", "inline": True}
                 ]
             }]
         }
