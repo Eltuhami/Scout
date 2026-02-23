@@ -1,19 +1,17 @@
 import json
 import os
 import re
-import random
-import time
+import requests
 from dataclasses import dataclass
 from google import genai
 from google.genai import types
-import requests
 from bs4 import BeautifulSoup
 
 # ─── CONFIGURATION ──────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# 🔥 Fixed Model ID for the new GenAI SDK
+# 🔥 Use the versioned ID to force the SDK to find the model
 MODEL_NAME = "gemini-1.5-flash" 
 # ────────────────────────────────────────────────────────────────────────
 
@@ -46,12 +44,8 @@ def save_history(item_url):
         f.write(item_url + "\n")
 
 def get_dynamic_keyword(client):
-    prompt = (
-        f"Suggest ONE specific collectible (e.g. 'Vintage Lego', 'Pokemon Box') "
-        f"that costs under {MAX_BUY_PRICE}€. Return ONLY the keyword."
-    )
+    prompt = f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the keyword."
     try:
-        # The new SDK needs exactly "gemini-1.5-flash"
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
         print(f"[SEARCH] AI Keyword: {keyword}", flush=True)
@@ -77,8 +71,9 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 title_el = item.find("h3") or item.find("h2")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 Trash Filter: Ignore pagination/navigation text
-                if any(x in title.lower() for x in ["seite", "pagination", "navigation", "feedback", "benachrichtigungen"]):
+                # 🚮 Advanced Trash Filter
+                trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
+                if any(x in title.lower() for x in trash):
                     continue
 
                 link_el = item.find("a", href=re.compile(r"itm/"))
@@ -106,11 +101,7 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
     profitable_deals = []
     for l in listings:
         print(f"[AI] Analyzing: {l.title}...", flush=True)
-        prompt = (
-            f"Estimate the resale price for '{l.title}' currently listed at {l.price}€. "
-            "Look for condition issues in the photo. "
-            "Return ONLY a JSON array: [{'resale_price': 30.0, 'reasoning': '...', 'score': 80}]"
-        )
+        prompt = f"Estimate resale for '{l.title}' at {l.price}€. Return JSON: [{{'resale_price': 30.0, 'reasoning': '...', 'score': 80}}]"
         
         payload = [prompt]
         if l.image_url:
@@ -149,8 +140,7 @@ def send_discord_notification(analyses: list[ProfitAnalysis]):
                 "thumbnail": {"url": a.listing.image_url},
                 "fields": [
                     {"name": "Price", "value": f"{a.listing.price}€", "inline": True},
-                    {"name": "Profit", "value": f"{a.net_profit}€", "inline": True},
-                    {"name": "Score", "value": f"{a.score}/100", "inline": True}
+                    {"name": "Profit", "value": f"{a.net_profit}€", "inline": True}
                 ]
             }]
         }
