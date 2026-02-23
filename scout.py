@@ -1,140 +1,349 @@
-import json
 import os
-import re
+import random
 import requests
-from dataclasses import dataclass
-from google import genai
-from google.genai import types
 from bs4 import BeautifulSoup
+from google import genai
 
-# ─── CONFIGURATION ──────────────────────────────────────────────────────
-MAX_BUY_PRICE = 16.0    
-MIN_NET_PROFIT = 5.0    
-NUM_LISTINGS = 3        
-# 🔥 SWITCHED: Using the ultra-stable Pro model to kill the 404 error
-MODEL_NAME = "gemini-pro" 
-# ────────────────────────────────────────────────────────────────────────
+# ========================
+# CONFIGURATION
+# ========================
 
-FEE_RATE = 0.15
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
+
+MODEL_NAME = "gemini-1.5-flash"
+
+MAX_BUY_PRICE = 16.0
+MIN_PROFIT = 5.0
+VINTED_FEE = 0.15
+NUM_LISTINGS = 5
+
 HISTORY_FILE = "history.txt"
+KEYWORD_HISTORY_FILE = "keyword_history.txt"
 
-@dataclass
-class Listing:
-    title: str
-    price: float
-    image_url: str
-    item_url: str
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r") as f:
-            return set(f.read().splitlines())
-    return set()
+# ========================
+# HIGH-PERFORMANCE KEYWORDS
+# ========================
 
-def save_history(item_url):
-    with open(HISTORY_FILE, "a") as f:
-        f.write(item_url + "\n")
+KEYWORDS = [
 
-def get_dynamic_keyword(client):
-    prompt = f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the keyword."
-    try:
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        keyword = response.text.strip().replace("'", "").replace('"', "")
-        print(f"[SEARCH] AI Keyword: {keyword}", flush=True)
-        return keyword
-    except Exception as e:
-        print(f"[ERROR] AI Keyword failed: {e}", flush=True)
-        return "Vintage Lego"
+    # electronics
+    "Sony Walkman",
+    "iPod Classic",
+    "iPod Nano",
+    "Nintendo DS Konsole",
+    "Gameboy Konsole",
+    "PSP Konsole",
+    "Retro Taschenrechner",
 
-def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
-    scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
-    
-    try:
-        response = requests.get(proxy_url, timeout=60)
-        soup = BeautifulSoup(response.text, "html.parser")
-        # 🎯 Targeted selector for real items only
-        items = soup.find_all("div", class_="s-item__info")
-        
-        listings = []
-        for item in items:
-            if len(listings) >= NUM_LISTINGS: break
-            try:
-                title_el = item.find("div", class_="s-item__title") or item.find("h3")
-                title = title_el.get_text(strip=True) if title_el else ""
-                
-                # 🚮 TRASH FILTER: Skips pagination/menus found in your logs
-                trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
-                if not title or any(x in title.lower() for x in trash):
-                    continue
+    # watches
+    "Casio Vintage Uhr",
+    "Seiko Uhr Vintage",
 
-                link_el = item.find("a", class_="s-item__link")
-                if not link_el: continue
-                item_url = link_el["href"].split("?")[0]
-                if item_url in seen_items: continue
-                
-                price_el = item.find("span", class_="s-item__price")
-                if not price_el: continue
-                nums = re.sub(r'[^\d.,]', '', price_el.get_text()).replace('.', '').replace(',', '.')
-                match = re.search(r"(\d+\.\d+|\d+)", nums)
-                price_val = float(match.group(1)) if match else 0.0
-                
-                if 0 < price_val <= MAX_BUY_PRICE:
-                    img_container = item.parent.find("div", class_="s-item__image-wrapper")
-                    img = img_container.find("img") if img_container else None
-                    img_url = img.get("src") or img.get("data-src") or "" if img else ""
-                    listings.append(Listing(title=title, price=price_val, image_url=img_url, item_url=item_url))
-            except: continue
-        return listings
-    except: return []
+    # collectibles
+    "Pokemon Sammlung",
+    "YuGiOh Sammlung",
+    "Funko Pop Limited",
+    "Hot Wheels Sammlung",
 
-def analyse_all_gemini(listings: list[Listing], client) -> list:
-    profitable_deals = []
-    for l in listings:
-        print(f"[AI] Analyzing: {l.title}...", flush=True)
-        # Note: gemini-pro (text-only) is used for keyword/price analysis here
-        prompt = f"Estimate resale for '{l.title}' at {l.price}€. Return JSON: [{{'resale_price': 35.0, 'reasoning': '...', 'score': 85}}]"
-        
+    # cameras
+    "Polaroid Kamera",
+    "Canon Analog Kamera",
+    "Vintage Kamera",
+
+    # toys
+    "Lego Star Wars",
+    "Lego Minifiguren Sammlung",
+    "Playmobil Sammlung",
+
+    # misc
+    "Retro Elektronik",
+    "Vintage Elektronik"
+]
+
+# words that indicate LOW resale value
+LOW_VALUE_WORDS = [
+    "hülle",
+    "case",
+    "kabel",
+    "adapter",
+    "manual",
+    "anleitung",
+    "dvd",
+    "cd",
+    "buch",
+    "defekt nur teile",
+    "ersatzteil"
+]
+
+TRASH_WORDS = [
+    "seite",
+    "pagination",
+    "navigation",
+    "feedback",
+    "altersempfehlung",
+    "benachrichtigungen"
+]
+
+# ========================
+# FILE HELPERS
+# ========================
+
+def load_file_set(filename):
+
+    if not os.path.exists(filename):
+        return set()
+
+    with open(filename, "r", encoding="utf-8") as f:
+        return set(line.strip() for line in f)
+
+
+def save_to_file(filename, value):
+
+    with open(filename, "a", encoding="utf-8") as f:
+        f.write(value + "\n")
+
+
+# ========================
+# SMART KEYWORD ROTATION
+# ========================
+
+def get_keyword():
+
+    used = load_file_set(KEYWORD_HISTORY_FILE)
+
+    available = [k for k in KEYWORDS if k not in used]
+
+    if not available:
+        open(KEYWORD_HISTORY_FILE, "w").close()
+        available = KEYWORDS
+
+    keyword = random.choice(available)
+
+    save_to_file(KEYWORD_HISTORY_FILE, keyword)
+
+    print(f"[KEYWORD] {keyword}")
+
+    return keyword
+
+
+# ========================
+# EBAY SCRAPER
+# ========================
+
+def scrape_ebay(keyword):
+
+    url = (
+        "https://www.ebay.de/sch/i.html"
+        f"?_nkw={keyword}"
+        "&LH_BIN=1"
+        "&LH_PrefLoc=1"
+        "&LH_ItemCondition=3000"
+        "&_udhi=16"
+        "&_sop=15"
+    )
+
+    payload = {
+        "api_key": SCRAPER_API_KEY,
+        "url": url
+    }
+
+    r = requests.get(
+        "http://api.scraperapi.com",
+        params=payload,
+        timeout=60
+    )
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    listings = []
+
+    for item in soup.select(".s-item"):
+
+        title_tag = item.select_one(".s-item__title")
+        price_tag = item.select_one(".s-item__price")
+        link_tag = item.select_one(".s-item__link")
+
+        if not title_tag or not price_tag or not link_tag:
+            continue
+
+        title = title_tag.get_text().strip().lower()
+
+        if any(word in title for word in TRASH_WORDS):
+            continue
+
+        if any(word in title for word in LOW_VALUE_WORDS):
+            continue
+
+        price_text = (
+            price_tag.get_text()
+            .replace("€", "")
+            .replace(",", ".")
+            .split(" ")[0]
+        )
+
         try:
-            response = client.models.generate_content(
-                model=MODEL_NAME, 
-                contents=prompt, 
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+            price = float(price_text)
+        except:
+            continue
+
+        if price > MAX_BUY_PRICE:
+            continue
+
+        listings.append({
+            "title": title_tag.get_text().strip(),
+            "price": price,
+            "url": link_tag.get("href")
+        })
+
+        if len(listings) >= NUM_LISTINGS:
+            break
+
+    print(f"[SCRAPER] Found {len(listings)} candidates")
+
+    return listings
+
+
+# ========================
+# GEMINI BATCH RESALE ESTIMATION
+# ========================
+
+def estimate_resale_prices(listings):
+
+    if not listings:
+        return []
+
+    prompt = (
+        "Estimate realistic resale prices on Vinted Germany.\n"
+        "Return ONLY numbers separated by commas.\n\n"
+    )
+
+    for i, item in enumerate(listings):
+        prompt += f"{i+1}. {item['title']}\n"
+
+    try:
+
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt
+        )
+
+        text = response.text.strip()
+
+        prices = [
+            float(x.strip())
+            for x in text.split(",")
+        ]
+
+        print(f"[GEMINI] {prices}")
+
+        return prices
+
+    except Exception as e:
+
+        print(f"[GEMINI ERROR] {e}")
+
+        return []
+
+
+# ========================
+# PROFIT CALCULATION
+# ========================
+
+def calculate_profit(buy, resale):
+
+    net = resale * (1 - VINTED_FEE)
+
+    return round(net - buy, 2)
+
+
+# ========================
+# DISCORD ALERT
+# ========================
+
+def send_discord(item, resale, profit):
+
+    message = (
+        f"🔥 Flip Found\n\n"
+        f"{item['title']}\n\n"
+        f"Buy: {item['price']}€\n"
+        f"Resale: {resale}€\n"
+        f"Profit: {profit}€\n\n"
+        f"{item['url']}"
+    )
+
+    try:
+
+        requests.post(
+            DISCORD_WEBHOOK,
+            json={"content": message},
+            timeout=30
+        )
+
+        print("[DISCORD] Alert sent")
+
+    except Exception as e:
+
+        print(f"[DISCORD ERROR] {e}")
+
+
+# ========================
+# MAIN LOOP
+# ========================
+
+def main():
+
+    history = load_file_set(HISTORY_FILE)
+
+    keyword = get_keyword()
+
+    listings = scrape_ebay(keyword)
+
+    if not listings:
+        return
+
+    resale_prices = estimate_resale_prices(listings)
+
+    if len(resale_prices) != len(listings):
+        print("[ERROR] Gemini mismatch")
+        return
+
+    for item, resale in zip(listings, resale_prices):
+
+        if item["url"] in history:
+            continue
+
+        profit = calculate_profit(
+            item["price"],
+            resale
+        )
+
+        print(
+            f"[CHECK] buy {item['price']} | resale {resale} | profit {profit}"
+        )
+
+        if profit >= MIN_PROFIT:
+
+            send_discord(
+                item,
+                resale,
+                profit
             )
-            data = json.loads(response.text)
-            entry = data[0] if isinstance(data, list) else data
-            resale = float(entry.get("resale_price", 0))
-            profit = (resale * (1 - FEE_RATE)) - l.price
-            
-            if profit >= MIN_NET_PROFIT:
-                profitable_deals.append({"listing": l, "profit": round(profit, 2)})
-        except Exception as e:
-            print(f"[AI ERROR] {e}", flush=True)
-            
-    return profitable_deals
+
+            save_to_file(
+                HISTORY_FILE,
+                item["url"]
+            )
+
+            print("[SUCCESS] PROFITABLE")
+
+
+# ========================
+# ENTRY POINT
+# ========================
 
 if __name__ == "__main__":
-    print("--- [START] Bot Active ---", flush=True)
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if api_key:
-        client = genai.Client(api_key=api_key)
-        seen = load_history()
-        keyword = get_dynamic_keyword(client)
-        items = scrape_ebay_listings(keyword, seen)
-        
-        if items:
-            print(f"[INFO] Scanning {len(items)} real products...", flush=True)
-            deals = analyse_all_gemini(items, client)
-            if deals:
-                webhook_url = os.getenv("DISCORD_WEBHOOK", "")
-                for d in deals:
-                    l = d["listing"]
-                    payload = {"embeds": [{"title": f"💰 DEAL: {l.title[:100]}", "url": l.item_url, "color": 65450,
-                               "fields": [{"name": "Price", "value": f"{l.price}€", "inline": True},
-                                          {"name": "Profit", "value": f"{d['profit']}€", "inline": True}]}]}
-                    requests.post(webhook_url, json=payload)
-                    save_history(l.item_url)
-            else: print("[INFO] No profitable items found.", flush=True)
-        else: print("[INFO] No new items found on eBay.", flush=True)
-    print("--- [FINISH] Cycle Complete ---", flush=True)
+    main()
