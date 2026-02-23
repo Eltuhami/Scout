@@ -10,13 +10,14 @@ import requests
 from bs4 import BeautifulSoup
 
 # ─── EDIT ONLY THESE VARIABLES ──────────────────────────────────────────
-MAX_BUY_PRICE = 16.0  # Current bank balance
-MIN_NET_PROFIT = 5.0  # Min profit goal
-NUM_LISTINGS = 1      # 1 item per run to keep Free Tier stable
+MAX_BUY_PRICE = 16.0  
+MIN_NET_PROFIT = 5.0  
+NUM_LISTINGS = 1      
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
+MODEL_NAME = "gemini-1.5-flash" # 🔥 Higher daily limit (1,500 RPD)
 
 @dataclass
 class Listing:
@@ -50,7 +51,7 @@ def get_dynamic_keyword(client):
         "on eBay. No consoles or phones. Return ONLY the keyword."
     )
     try:
-        response = client.models.generate_content(model='gemini-3.0-flash', contents=prompt)
+        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         return response.text.strip().replace("'", "").replace('"', "")
     except:
         return "Lego Minifigure"
@@ -97,33 +98,29 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     except: return []
 
 def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
-    payload = ["Analyze resale value for Vinted. Return JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]"]
-    for i, l in enumerate(listings, 1):
-        payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
+    if not listings: return []
+    l = listings[0]
+    payload = f"Analyze resale value for Vinted: '{l.title}' - Price: {l.price} €. Return JSON array: [{{'resale_price': 50.0, 'reasoning': '...', 'score': 85}}]"
 
     try:
         response = client.models.generate_content(
-            model='gemini-3.0-flash', 
+            model=MODEL_NAME, 
             contents=payload,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+            config=types.GenerateContentConfig(response_mime_type="application/json")
         )
         items_data = json.loads(response.text)
+        entry = items_data[0] if isinstance(items_data, list) else items_data
         
-        profitable = []
-        for entry in items_data:
-            idx = int(entry.get("id", 1)) - 1
-            if 0 <= idx < len(listings):
-                l = listings[idx]
-                resale = float(entry.get("resale_price", 0))
-                profit = (resale * (1 - FEE_RATE)) - l.price
-                if profit >= MIN_NET_PROFIT:
-                    profitable.append(ProfitAnalysis(
-                        listing=l, resale_price=resale, net_profit=round(profit, 2),
-                        reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
-                    ))
-        return profitable
+        resale = float(entry.get("resale_price", 0))
+        profit = (resale * (1 - FEE_RATE)) - l.price
+        if profit >= MIN_NET_PROFIT:
+            return [ProfitAnalysis(
+                listing=l, resale_price=resale, net_profit=round(profit, 2),
+                reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
+            )]
     except:
         return []
+    return []
 
 def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
     webhook_url = os.getenv("DISCORD_WEBHOOK", "")
