@@ -73,30 +73,32 @@ def scrape_ebay_listings() -> list[Listing]:
             texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
             title = texts[0] if texts else "Unknown Item"
             
-            # 🔥 THE PRICE FIX: Strictly target the exact price span
-            price_el = item.find(class_="s-item__price")
-            if not price_el: continue
-            price_text = price_el.get_text(strip=True)
-            
-            # Clean German formatting (e.g., "EUR 1.250,00" -> 1250.00)
-            price_clean = price_text.replace("EUR", "").replace("€", "").strip()
-            if ',' in price_clean and '.' in price_clean:
-                if price_clean.rfind(',') > price_clean.rfind('.'):
-                    price_clean = price_clean.replace('.', '').replace(',', '.')
-                else:
-                    price_clean = price_clean.replace(',', '')
-            elif ',' in price_clean:
-                price_clean = price_clean.replace(',', '.')
+            # 🔥 THE HYBRID FIX: Grab any price, but ignore the 10,000 max filter
+            price_val = 0.0
+            for el in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
+                text_val = el.get_text(strip=True)
+                # Ignore the max filter
+                if "10000" in text_val or "10.000" in text_val: 
+                    continue
                 
-            match = re.search(r"(\d+\.\d+|\d+)", price_clean)
-            price_val = float(match.group(1)) if match else 0.0
+                # Clean the string and extract the math
+                clean_str = re.sub(r'[^\d.,]', '', text_val).replace('.', '').replace(',', '.')
+                match = re.search(r"(\d+\.\d+|\d+)", clean_str)
+                if match:
+                    price_val = float(match.group(1))
+                    break # Stop looking once we find the real price
+            
+            if price_val == 0.0:
+                continue # Skip this item if no real price was found
 
             img_el = item.find("img")
             image_url = img_el.get("src") or img_el.get("data-src") or ""
             
             listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
             SEEN_ITEMS.add(item_url)
-        except: continue
+        except Exception as e: 
+            print(f"[DEBUG] Parse skipped: {e}", flush=True)
+            continue
 
     print(f"[SCRAPER] Successfully parsed {len(listings)} items.", flush=True)
     return listings
