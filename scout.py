@@ -9,11 +9,13 @@ from google.genai import types
 import requests
 from bs4 import BeautifulSoup
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
-MAX_BUY_PRICE = 16.0  # Based on your bank balance
-MIN_NET_PROFIT = 5.0  
+# ─── EDIT ONLY THESE VARIABLES ──────────────────────────────────────────
+MAX_BUY_PRICE = 16.0  # Change this as your bank account grows
+MIN_NET_PROFIT = 5.0  # Minimum profit you want to make per flip
+NUM_LISTINGS = 3      # How many items to check per 5-minute run
+# ────────────────────────────────────────────────────────────────────────
+
 FEE_RATE = 0.15
-NUM_LISTINGS = 3         
 
 @dataclass
 class Listing:
@@ -31,28 +33,28 @@ class ProfitAnalysis:
     score: int
 
 def get_dynamic_keyword(client):
-    """Asks the AI for a REALISTIC niche for a 16€ budget."""
+    """AI Brain: Automatically picks a niche based on your CURRENT budget."""
     prompt = (
-        f"You are a professional reseller with a strict budget of {MAX_BUY_PRICE}€. "
-        "Suggest ONE specific item or brand that can REALISTICALLY be found on eBay for under 16€ "
-        "and resold for a profit. Do NOT suggest expensive electronics like consoles or iPhones. "
-        "Think of collectibles, media, or small vintage items. Return ONLY the keyword."
+        f"You are a professional reseller. My current budget is {MAX_BUY_PRICE}€. "
+        f"Suggest ONE specific item or brand that is REALISTICALLY found for under {MAX_BUY_PRICE}€ "
+        "on eBay and can be flipped for a profit. DO NOT suggest items that usually cost more "
+        "(like consoles or iPhones). Think of collectibles, specific toys, or media. "
+        "Return ONLY the keyword."
     )
     try:
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
-        print(f"[AI] Realistic Dynamic Search: {keyword}", flush=True)
+        print(f"[AI] Budget-Aware Search: {keyword}", flush=True)
         return keyword
     except:
-        # Emergency backup of realistic keywords
-        return random.choice(["Lego Star Wars Minifigure", "Vintage Casio Watch", "Pokemon Booster Pack"])
+        return "Lego Minifigure"
 
 def scrape_ebay_listings(keyword) -> list[Listing]:
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
+    # Scraper strictly respects your MAX_BUY_PRICE variable
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
     
-    print(f"[SCRAPER] Fetching '{keyword}'...", flush=True)
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
@@ -111,6 +113,7 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
+                # Logic strictly respects your MIN_NET_PROFIT variable
                 if profit >= MIN_NET_PROFIT:
                     profitable.append(ProfitAnalysis(
                         listing=l, resale_price=resale, net_profit=round(profit, 2),
@@ -147,7 +150,7 @@ if __name__ == "__main__":
     api_key = os.getenv("GEMINI_API_KEY", "")
     if api_key:
         client = genai.Client(api_key=api_key)
-        keyword = get_dynamic_keyword(client) # Dynamic Brain
+        keyword = get_dynamic_keyword(client)
         listings = scrape_ebay_listings(keyword)
         if listings:
             profitable = analyse_all_gemini(listings, client)
