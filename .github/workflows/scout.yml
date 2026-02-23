@@ -28,3 +28,11 @@ jobs:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: python scout.py
+
+        - name: Commit and Push History
+        run: |
+          git config --global user.name "ScoutBot"
+          git config --global user.email "bot@scout.com"
+          git add history.txt
+          git commit -m "Update history [skip ci]" || echo "No changes to commit"
+          git push
