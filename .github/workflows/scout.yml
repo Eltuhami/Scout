@@ -2,12 +2,14 @@ name: Arbitrage Scout Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *' 
+    - cron: '*/10 * * * *' # 🔥 The 10-minute timer
   workflow_dispatch: 
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # 🔥 Allows the bot to save history.txt
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -20,7 +22,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 google-genai discord-webhook flask
+          pip install requests beautifulsoup4 google-genai flask
 
       - name: Run Scout Bot
         env:
@@ -29,10 +31,11 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: python scout.py
 
-        - name: Commit and Push History
+      - name: Commit and Push History
         run: |
           git config --global user.name "ScoutBot"
           git config --global user.email "bot@scout.com"
+          touch history.txt
           git add history.txt
-          git commit -m "Update history [skip ci]" || echo "No changes to commit"
+          git commit -m "Update history [skip ci]" || echo "No changes"
           git push
