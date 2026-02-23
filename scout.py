@@ -103,7 +103,7 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
 
     try:
         response = client.models.generate_content(
-            model='gemini-2.0-flash', 
+            model='gemini-2.5-flash-lite', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
