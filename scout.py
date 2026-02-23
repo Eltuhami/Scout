@@ -9,7 +9,6 @@ from google import genai
 from google.genai import types
 import requests
 from bs4 import BeautifulSoup
-from discord_webhook import DiscordEmbed, DiscordWebhook
 from flask import Flask, jsonify
 
 app = Flask(__name__)
@@ -19,12 +18,14 @@ def index():
     return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
-MAX_BUY_PRICE = 10000.0  
+MAX_BUY_PRICE = 16.0  # Adjusted to fit your 16.81€ balance
+MIN_NET_PROFIT = 5.0   # Only ping if you make at least 5€ profit
 FEE_RATE = 0.15
-NUM_LISTINGS = 1         
+NUM_LISTINGS = 3         
 SCAN_INTERVAL_SECONDS = 300 
 
-SEARCH_KEYWORDS = ["iPhone", "Nintendo Switch", "Lego Star Wars", "GoPro"]
+# Keywords focused on high-turnover items in your price range
+SEARCH_KEYWORDS = ["Lego Minifigure", "Pokemon Card Holo", "Vintage Casio", "Gameboy Game"]
 SEEN_ITEMS = set()
 
 @dataclass
@@ -70,35 +71,31 @@ def scrape_ebay_listings() -> list[Listing]:
             item_url = link_el["href"].split("?")[0]
             if item_url in SEEN_ITEMS: continue
             
-            texts = [t.get_text(strip=True) for t in item.find_all(["h3", "h2", "span"]) if len(t.get_text(strip=True)) > 10]
-            title = texts[0] if texts else "Unknown Item"
+            # 🔥 FIXED TITLE DETECTION
+            title = "Unknown Item"
+            title_el = item.find("h3") or item.find("h2")
+            if title_el:
+                title = title_el.get_text(strip=True).replace("Neues Angebot", "")
             
-            # 🔥 THE HYBRID FIX: Grab any price, but ignore the 10,000 max filter
             price_val = 0.0
             for el in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
                 text_val = el.get_text(strip=True)
-                # Ignore the max filter
-                if "10000" in text_val or "10.000" in text_val: 
-                    continue
+                if "10000" in text_val or "10.000" in text_val: continue
                 
-                # Clean the string and extract the math
                 clean_str = re.sub(r'[^\d.,]', '', text_val).replace('.', '').replace(',', '.')
                 match = re.search(r"(\d+\.\d+|\d+)", clean_str)
                 if match:
                     price_val = float(match.group(1))
-                    break # Stop looking once we find the real price
+                    break 
             
-            if price_val == 0.0:
-                continue # Skip this item if no real price was found
+            if price_val == 0.0 or price_val > MAX_BUY_PRICE: continue
 
             img_el = item.find("img")
             image_url = img_el.get("src") or img_el.get("data-src") or ""
             
             listings.append(Listing(title=title, price=price_val, image_url=image_url, item_url=item_url))
             SEEN_ITEMS.add(item_url)
-        except Exception as e: 
-            print(f"[DEBUG] Parse skipped: {e}", flush=True)
-            continue
+        except: continue
 
     print(f"[SCRAPER] Successfully parsed {len(listings)} items.", flush=True)
     return listings
@@ -129,7 +126,7 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model='gemini-2.5-flash', 
+                model='gemini-2.0-flash', 
                 contents=payload,
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
             )
@@ -138,17 +135,10 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
             break 
             
         except Exception as e:
-            error_msg = str(e)
-            if "503" in error_msg:
-                print(f"[AI] Server overloaded (503). Retrying in {delay} seconds... (Attempt {attempt + 1}/{max_retries})", flush=True)
+            if "503" in str(e):
                 time.sleep(delay)
                 delay *= 2 
-            elif "429" in error_msg:
-                print("[AI] Quota hit. Sleeping 60s...", flush=True)
-                time.sleep(60)
-                break 
             else:
-                print(f"[AI] Gemini Error: {e}", flush=True)
                 return []
 
     profitable = []
@@ -161,24 +151,19 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
                 l = listings[idx]
                 resale = float(entry.get("resale_price", 0))
                 profit = (resale * (1 - FEE_RATE)) - l.price
-                
-                # 🔥 ALWAYS PING DISCORD AND LOG THE MATH
-                print(f"[DEBUG] Calculated Net Profit: {profit} € for item priced at {l.price} €", flush=True)
-                profitable.append(ProfitAnalysis(
-                    listing=l, resale_price=resale, net_profit=round(profit, 2),
-                    reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
-                ))
+                print(f"[DEBUG] Math: {resale}€ resale - {l.price}€ buy = {profit}€ profit", flush=True)
+                if profit >= MIN_NET_PROFIT:
+                    profitable.append(ProfitAnalysis(
+                        listing=l, resale_price=resale, net_profit=round(profit, 2),
+                        reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
+                    ))
         except: continue
     return profitable
 
 def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
     webhook_url = os.getenv("DISCORD_WEBHOOK", "")
-    
-    if not webhook_url: 
-        print("[DISCORD] ❌ ERROR: DISCORD_WEBHOOK environment variable is missing!", flush=True)
-        return
+    if not webhook_url: return
         
-    # 🔥 THE STEALTH FIX: Disguise the bot as a normal Google Chrome browser
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Content-Type": "application/json"
@@ -187,14 +172,13 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
     for analysis in analyses:
         listing = analysis.listing
         print(f"[DISCORD] Sending stealth ping for: {listing.title[:30]}...", flush=True)
-        
-        # Build the exact same embed using raw JSON instead of the blocked library
         payload = {
             "username": "Gemini Scout ⚡",
             "embeds": [{
                 "title": f"💰 {listing.title[:200]}",
                 "url": listing.item_url,
                 "color": 65450, 
+                "thumbnail": {"url": listing.image_url} if listing.image_url else {},
                 "fields": [
                     {"name": "🏷️ Buy Price", "value": f"**{listing.price:.2f} €**", "inline": True},
                     {"name": "✅ Net Profit", "value": f"**{analysis.net_profit:.2f} €**", "inline": True},
@@ -202,36 +186,20 @@ def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
                 ]
             }]
         }
-        
-        if listing.image_url.startswith("http"):
-            payload["embeds"][0]["thumbnail"] = {"url": listing.image_url}
-            
         try:
-            # Send the disguised request directly to Discord
-            response = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
-            
-            if response.status_code in [200, 204]:
-                print("[DISCORD] ✅ Stealth Ping successful!", flush=True)
-            else:
-                print(f"[DISCORD] ❌ Cloudflare blocked it again: HTTP {response.status_code}", flush=True)
-        except Exception as e:
-            print(f"[DISCORD] ❌ Network error: {e}", flush=True)
-            
-        time.sleep(2) # Pause for 2 seconds to avoid triggering spam filters
+            requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+        except: pass
 
 def scout_loop():
-    while True:
-        try:
-            print(f"\n--- [⚡] Gemini Bot awake. ---", flush=True)
-            listings = scrape_ebay_listings()
-            if listings:
-                profitable = analyse_all_gemini(listings)
-                if profitable: 
-                    send_discord_notification(profitable)
-        except Exception as exc: print(f"[SCOUT] Error: {exc}", flush=True)
-        time.sleep(SCAN_INTERVAL_SECONDS)
-
-threading.Thread(target=scout_loop, daemon=True).start()
+    # Only run ONCE per execution for GitHub Actions compatibility
+    try:
+        print(f"\n--- [⚡] Gemini Bot awake. ---", flush=True)
+        listings = scrape_ebay_listings()
+        if listings:
+            profitable = analyse_all_gemini(listings)
+            if profitable: 
+                send_discord_notification(profitable)
+    except Exception as exc: print(f"[SCOUT] Error: {exc}", flush=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+    scout_loop()
