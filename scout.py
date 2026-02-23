@@ -31,15 +31,21 @@ class ProfitAnalysis:
     score: int
 
 def get_dynamic_keyword(client):
-    """Asks the AI to pick a profitable niche for a 16€ budget."""
-    prompt = f"Pick one specific, high-demand item category to flip on Vinted with a budget of {MAX_BUY_PRICE}€. Return ONLY the keyword (e.g. 'Casio F-91W')."
+    """Asks the AI for a REALISTIC niche for a 16€ budget."""
+    prompt = (
+        f"You are a professional reseller with a strict budget of {MAX_BUY_PRICE}€. "
+        "Suggest ONE specific item or brand that can REALISTICALLY be found on eBay for under 16€ "
+        "and resold for a profit. Do NOT suggest expensive electronics like consoles or iPhones. "
+        "Think of collectibles, media, or small vintage items. Return ONLY the keyword."
+    )
     try:
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
-        print(f"[AI] Dynamic Search Keyword: {keyword}", flush=True)
+        print(f"[AI] Realistic Dynamic Search: {keyword}", flush=True)
         return keyword
     except:
-        return random.choice(["Lego Star Wars", "Pokemon Card", "Vintage Tech"])
+        # Emergency backup of realistic keywords
+        return random.choice(["Lego Star Wars Minifigure", "Vintage Casio Watch", "Pokemon Booster Pack"])
 
 def scrape_ebay_listings(keyword) -> list[Listing]:
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
