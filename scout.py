@@ -17,7 +17,7 @@ NUM_LISTINGS = 1
 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
-MODEL_NAME = "gemini-1.5-flash" # 🔥 Higher daily limit (1,500 RPD)
+MODEL_NAME = "gemini-1.5-flash" # 🔥 1,500 Daily Requests + High-Speed Vision
 
 @dataclass
 class Listing:
@@ -46,7 +46,6 @@ def save_history(item_url):
 
 def get_dynamic_keyword(client):
     prompt = (
-        f"You are a professional reseller. My current budget is {MAX_BUY_PRICE}€. "
         f"Suggest ONE specific item that realistically sells for under {MAX_BUY_PRICE}€ "
         "on eBay. No consoles or phones. Return ONLY the keyword."
     )
@@ -72,7 +71,6 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
             try:
                 link_el = item.find("a", href=re.compile(r"itm/"))
                 if not link_el: continue
-                
                 item_url = link_el["href"].split("?")[0]
                 if item_url in seen_items: continue
                 
@@ -82,7 +80,6 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 price_val = 0.0
                 for el in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
                     t = el.get_text(strip=True)
-                    if "10000" in t: continue
                     nums = re.sub(r'[^\d.,]', '', t).replace('.', '').replace(',', '.')
                     match = re.search(r"(\d+\.\d+|\d+)", nums)
                     if match:
@@ -100,7 +97,22 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
 def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
     if not listings: return []
     l = listings[0]
-    payload = f"Analyze resale value for Vinted: '{l.title}' - Price: {l.price} €. Return JSON array: [{{'resale_price': 50.0, 'reasoning': '...', 'score': 85}}]"
+    
+    # 🔥 Explicit Vision Instructions
+    prompt = (
+        f"Inspect this item: '{l.title}' priced at {l.price}€. "
+        "1. LOOK CLOSELY at the image for any damage, missing parts, or heavy wear. "
+        "2. Estimate the resale price on Vinted. "
+        "3. If damaged, lower the resale price significantly. "
+        "Return ONLY a JSON array: [{'resale_price': 50.0, 'reasoning': '...', 'score': 85}]"
+    )
+    
+    payload = [prompt]
+    if l.image_url:
+        try:
+            img_data = requests.get(l.image_url, timeout=5).content
+            payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
+        except: pass
 
     try:
         response = client.models.generate_content(
@@ -108,18 +120,13 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
-        items_data = json.loads(response.text)
-        entry = items_data[0] if isinstance(items_data, list) else items_data
-        
+        entry = json.loads(response.text)[0]
         resale = float(entry.get("resale_price", 0))
         profit = (resale * (1 - FEE_RATE)) - l.price
+        
         if profit >= MIN_NET_PROFIT:
-            return [ProfitAnalysis(
-                listing=l, resale_price=resale, net_profit=round(profit, 2),
-                reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
-            )]
-    except:
-        return []
+            return [ProfitAnalysis(listing=l, resale_price=resale, net_profit=round(profit, 2), reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50)))]
+    except: return []
     return []
 
 def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
