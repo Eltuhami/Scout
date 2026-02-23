@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# 🔥 This exact string is required to fix your 404 Error
+# 🔥 Use the string "gemini-1.5-flash" to fix the 404 SDK error
 MODEL_NAME = "gemini-1.5-flash" 
 # ────────────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,7 @@ def save_history(item_url):
 def get_dynamic_keyword(client):
     prompt = f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the keyword."
     try:
+        # The new SDK automatically handles prefixes; use just the name
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
         print(f"[SEARCH] AI Keyword: {keyword}", flush=True)
@@ -62,36 +63,38 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
-        items = soup.find_all(["li", "div"], class_=re.compile(r"item|s-item|result"))
+        # Target only real eBay listing containers
+        items = soup.find_all("div", class_="s-item__info")
         
         listings = []
         for item in items:
             if len(listings) >= NUM_LISTINGS: break
             try:
-                title_el = item.find("h3") or item.find("h2")
+                title_el = item.find("div", class_="s-item__title") or item.find("h3")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 Improved Filter to ignore eBay navigation text
+                # 🚮 TRASH FILTER: Skip eBay navigation and UI text
                 trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
-                if any(x in title.lower() for x in trash):
+                if not title or any(x in title.lower() for x in trash) or "neues angebot" in title.lower():
                     continue
 
-                link_el = item.find("a", href=re.compile(r"itm/"))
+                link_el = item.find("a", class_="s-item__link")
                 if not link_el: continue
                 item_url = link_el["href"].split("?")[0]
                 if item_url in seen_items: continue
                 
-                price_val = 0.0
-                for el in item.find_all(string=re.compile(r"EUR|€|\d+,\d+")):
-                    nums = re.sub(r'[^\d.,]', '', el).replace('.', '').replace(',', '.')
-                    match = re.search(r"(\d+\.\d+|\d+)", nums)
-                    if match:
-                        price_val = float(match.group(1))
-                        break
+                price_el = item.find("span", class_="s-item__price")
+                if not price_el: continue
+                nums = re.sub(r'[^\d.,]', '', price_el.get_text()).replace('.', '').replace(',', '.')
+                match = re.search(r"(\d+\.\d+|\d+)", nums)
+                price_val = float(match.group(1)) if match else 0.0
                 
                 if 0 < price_val <= MAX_BUY_PRICE:
-                    img = item.find("img")
-                    img_url = img.get("src") or img.get("data-src") or ""
+                    # Find image in the parent container
+                    img_container = item.parent.find("div", class_="s-item__image-wrapper")
+                    img = img_container.find("img") if img_container else None
+                    img_url = img.get("src") or img.get("data-src") or "" if img else ""
+                    
                     listings.append(Listing(title=title, price=price_val, image_url=img_url, item_url=item_url))
             except: continue
         return listings
@@ -101,10 +104,10 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
     profitable_deals = []
     for l in listings:
         print(f"[AI] Analyzing: {l.title}...", flush=True)
-        prompt = f"Estimate resale for '{l.title}' at {l.price}€. Return JSON: [{{'resale_price': 30.0, 'reasoning': '...', 'score': 80}}]"
+        prompt = f"Estimate resale for '{l.title}' at {l.price}€. Return JSON: [{{'resale_price': 35.0, 'reasoning': '...', 'score': 85}}]"
         
         payload = [prompt]
-        if l.image_url:
+        if l.image_url and l.image_url.startswith("http"):
             try:
                 img_data = requests.get(l.image_url, timeout=5).content
                 payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
@@ -135,8 +138,7 @@ def send_discord_notification(analyses: list[ProfitAnalysis]):
         payload = {
             "embeds": [{
                 "title": f"💰 DEAL: {a.listing.title[:100]}", 
-                "url": a.listing.item_url, 
-                "color": 65450,
+                "url": a.listing.item_url, "color": 65450,
                 "thumbnail": {"url": a.listing.image_url},
                 "fields": [
                     {"name": "Price", "value": f"{a.listing.price}€", "inline": True},
@@ -155,6 +157,7 @@ if __name__ == "__main__":
         keyword = get_dynamic_keyword(client)
         items = scrape_ebay_listings(keyword, seen)
         if items:
+            print(f"[INFO] Analyzing {len(items)} real items...", flush=True)
             deals = analyse_all_gemini(items, client)
             if deals:
                 send_discord_notification(deals)
