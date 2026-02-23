@@ -50,7 +50,7 @@ def get_dynamic_keyword(client):
         "on eBay. No consoles or phones. Return ONLY the keyword."
     )
     try:
-        response = client.models.generate_content(model='gemini-2.5-flash-lite', contents=prompt)
+        response = client.models.generate_content(model='gemini-3.0-flash', contents=prompt)
         return response.text.strip().replace("'", "").replace('"', "")
     except:
         return "Lego Minifigure"
@@ -103,7 +103,7 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
 
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash-lite', 
+            model='gemini-3.0-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
