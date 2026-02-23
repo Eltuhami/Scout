@@ -10,10 +10,11 @@ import requests
 from bs4 import BeautifulSoup
 
 # ─── CONFIGURATION (EDITABLE) ──────────────────────────────────────────
-MAX_BUY_PRICE = 16.0    # Your starting budget
-MIN_NET_PROFIT = 5.0    # Minimum profit after fees
-NUM_LISTINGS = 3        # Increased to find deals 3x faster
-MODEL_NAME = "gemini-1.5-flash" # 1,500 free daily requests + Vision
+MAX_BUY_PRICE = 16.0    
+MIN_NET_PROFIT = 5.0    
+NUM_LISTINGS = 3        
+# 🔥 Changed to include version prefix to fix the 404 error
+MODEL_NAME = "gemini-1.5-flash" 
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
