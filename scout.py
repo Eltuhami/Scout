@@ -18,7 +18,7 @@ app = Flask(__name__)
 def index():
     return jsonify({"status": "alive", "bot": "Gemini Scout ⚡"}), 200
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
+# ─── 2026 Stable Configuration ──────────────────────────────────────────────────
 MAX_BUY_PRICE = 10000.0  
 MIN_NET_PROFIT = -100.0   
 FEE_RATE = 0.15
@@ -106,17 +106,17 @@ def analyse_all_gemini(listings: list[Listing]) -> list[ProfitAnalysis]:
     payload.append("\nReturn JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]")
     
     try:
-        # 🔥 UPDATED TO GEMINI 3 FLASH
+        # 🔥 THE ONLY MODEL: Fixed for 2026 quota stability
         response = client.models.generate_content(
-            model='gemini-3-flash', 
+            model='gemini-2.0-flash', 
             contents=payload,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
         )
         items_data = json.loads(response.text)
     except Exception as e:
         if "429" in str(e):
-            print("[AI] Quota hit. Sleeping 60s...", flush=True)
-            time.sleep(60) 
+            print("[AI] Quota hit. Sleeping 65s...", flush=True)
+            time.sleep(65) 
         print(f"[AI] Gemini Error: {e}", flush=True)
         return []
 
