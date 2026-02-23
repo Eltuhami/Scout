@@ -1,11 +1,12 @@
 import os
 import random
+import json
 import requests
 from bs4 import BeautifulSoup
 from google import genai
 
 # ========================
-# CONFIGURATION
+# CONFIG
 # ========================
 
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
@@ -18,121 +19,119 @@ MAX_BUY_PRICE = 16.0
 MIN_PROFIT = 5.0
 VINTED_FEE = 0.15
 
-NUM_LISTINGS_PER_KEYWORD = 6
+LISTINGS_PER_KEYWORD = 8
 KEYWORDS_PER_RUN = 5
 
 HISTORY_FILE = "history.txt"
-KEYWORD_HISTORY_FILE = "keyword_history.txt"
+KEYWORD_STATS_FILE = "keyword_stats.json"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ========================
-# HIGH SUCCESS KEYWORDS
+# STARTING KEYWORDS
 # ========================
 
-KEYWORDS = [
+BASE_KEYWORDS = [
 
     "Sony Walkman",
-    "iPod Classic",
     "iPod Nano",
-    "Nintendo DS Konsole",
-    "Gameboy Konsole",
-    "PSP Konsole",
+    "iPod Classic",
+    "Nintendo DS",
+    "Gameboy",
 
     "Casio Vintage Uhr",
-    "Seiko Uhr Vintage",
+    "Seiko Uhr",
 
     "Pokemon Sammlung",
     "YuGiOh Sammlung",
-
-    "Funko Pop Limited",
-    "Hot Wheels Sammlung",
 
     "Polaroid Kamera",
     "Canon Analog Kamera",
 
     "Lego Star Wars",
-    "Lego Minifiguren Sammlung",
+    "Lego Minifiguren",
 
-    "Playmobil Sammlung",
+    "Funko Pop",
+    "Hot Wheels Sammlung",
 
-    "Retro Taschenrechner",
-
-    "Vintage Kamera",
-
-    "Retro Elektronik"
+    "Retro Taschenrechner"
 ]
 
-LOW_VALUE_WORDS = [
-
-    "hülle",
-    "case",
-    "kabel",
-    "adapter",
-    "manual",
-    "anleitung",
-    "dvd",
-    "cd",
-    "buch",
-    "ersatzteil",
-    "defekt nur teile"
-]
-
-TRASH_WORDS = [
-
-    "seite",
-    "pagination",
-    "navigation",
-    "feedback",
-    "altersempfehlung",
-    "benachrichtigungen"
+LOW_VALUE = [
+    "hülle", "case", "kabel", "adapter",
+    "anleitung", "manual", "dvd", "cd",
+    "buch", "ersatzteil"
 ]
 
 # ========================
 # FILE HELPERS
 # ========================
 
-def load_file_set(filename):
+def load_set(file):
 
-    if not os.path.exists(filename):
+    if not os.path.exists(file):
         return set()
 
-    with open(filename, "r", encoding="utf-8") as f:
-        return set(line.strip() for line in f)
+    with open(file, "r", encoding="utf-8") as f:
+        return set(x.strip() for x in f)
 
 
-def save_to_file(filename, value):
+def save_line(file, value):
 
-    with open(filename, "a", encoding="utf-8") as f:
+    with open(file, "a", encoding="utf-8") as f:
         f.write(value + "\n")
 
 
-# ========================
-# KEYWORD ROTATION
-# ========================
+def load_keyword_stats():
 
-def get_next_keywords():
+    if not os.path.exists(KEYWORD_STATS_FILE):
 
-    used = load_file_set(KEYWORD_HISTORY_FILE)
+        stats = {}
 
-    available = [k for k in KEYWORDS if k not in used]
+        for k in BASE_KEYWORDS:
+            stats[k] = {"profit": 0, "checked": 0}
 
-    if len(available) < KEYWORDS_PER_RUN:
-        open(KEYWORD_HISTORY_FILE, "w").close()
-        available = KEYWORDS.copy()
+        return stats
 
-    selected = random.sample(available, KEYWORDS_PER_RUN)
+    with open(KEYWORD_STATS_FILE, "r") as f:
+        return json.load(f)
 
-    for k in selected:
-        save_to_file(KEYWORD_HISTORY_FILE, k)
 
-    print(f"[KEYWORDS] {selected}")
+def save_keyword_stats(stats):
 
-    return selected
+    with open(KEYWORD_STATS_FILE, "w") as f:
+        json.dump(stats, f)
 
 
 # ========================
-# EBAY SCRAPER
+# SELF LEARNING KEYWORD SELECTION
+# ========================
+
+def choose_keywords():
+
+    stats = load_keyword_stats()
+
+    scored = []
+
+    for k, v in stats.items():
+
+        score = v["profit"] - (v["checked"] * 0.1)
+
+        scored.append((score, k))
+
+    scored.sort(reverse=True)
+
+    best = [k for _, k in scored[:10]]
+
+    selected = random.sample(best, min(KEYWORDS_PER_RUN, len(best)))
+
+    print("[KEYWORDS]", selected)
+
+    return selected, stats
+
+
+# ========================
+# EBAY SCRAPER (FIXED)
 # ========================
 
 def scrape_ebay(keyword):
@@ -141,14 +140,11 @@ def scrape_ebay(keyword):
         "https://www.ebay.de/sch/i.html"
         f"?_nkw={keyword}"
         "&LH_BIN=1"
-        "&LH_PrefLoc=3"
-        "&LH_ItemCondition=3000"
         "&_udhi=16"
         "&_sop=15"
     )
 
     payload = {
-
         "api_key": SCRAPER_API_KEY,
         "url": url
     }
@@ -165,21 +161,24 @@ def scrape_ebay(keyword):
 
         listings = []
 
-        for item in soup.select(".s-item"):
+        items = soup.select("li.s-item")
+
+        for item in items:
 
             title_tag = item.select_one(".s-item__title")
+
             price_tag = item.select_one(".s-item__price")
-            link_tag = item.select_one(".s-item__link")
+
+            link_tag = item.select_one("a.s-item__link")
 
             if not title_tag or not price_tag or not link_tag:
                 continue
 
-            title = title_tag.get_text().strip().lower()
+            title = title_tag.get_text().strip()
 
-            if any(word in title for word in TRASH_WORDS):
-                continue
+            lower = title.lower()
 
-            if any(word in title for word in LOW_VALUE_WORDS):
+            if any(w in lower for w in LOW_VALUE):
                 continue
 
             price_text = (
@@ -199,63 +198,53 @@ def scrape_ebay(keyword):
 
             listings.append({
 
-                "title": title_tag.get_text().strip(),
+                "title": title,
                 "price": price,
-                "url": link_tag.get("href")
+                "url": link_tag["href"]
             })
 
-            if len(listings) >= NUM_LISTINGS_PER_KEYWORD:
+            if len(listings) >= LISTINGS_PER_KEYWORD:
                 break
 
-        print(f"[SCRAPER] {keyword}: {len(listings)} candidates")
+        print(f"[SCRAPER] {keyword}: {len(listings)}")
 
         return listings
 
     except Exception as e:
 
-        print(f"[SCRAPER ERROR] {e}")
+        print("[SCRAPER ERROR]", e)
 
         return []
 
 
 # ========================
-# GEMINI BATCH VALUATION
+# GEMINI BATCH PRICE ESTIMATION
 # ========================
 
-def estimate_resale_prices(listings):
+def estimate_prices(listings):
 
     if not listings:
         return []
 
-    prompt = "Estimate realistic Vinted resale prices in EURO.\nReturn ONLY numbers separated by commas.\n\n"
+    prompt = "Estimate resale prices in EURO. Return numbers separated by commas.\n\n"
 
     for i, item in enumerate(listings):
-
         prompt += f"{i+1}. {item['title']}\n"
 
     try:
 
-        response = client.models.generate_content(
-
+        r = client.models.generate_content(
             model=MODEL_NAME,
             contents=prompt
         )
 
-        text = response.text.strip()
-
-        prices = [
-
-            float(x.strip())
-            for x in text.split(",")
-        ]
-
-        print(f"[GEMINI] {prices}")
+        prices = [float(x.strip()) for x in r.text.split(",")]
 
         return prices
 
     except Exception as e:
 
-        print(f"[GEMINI ERROR] {e}")
+        print("[GEMINI ERROR]", e)
 
         return []
 
@@ -264,57 +253,51 @@ def estimate_resale_prices(listings):
 # PROFIT
 # ========================
 
-def calculate_profit(buy, resale):
+def profit(buy, resale):
 
-    net = resale * (1 - VINTED_FEE)
-
-    return round(net - buy, 2)
+    return round((resale * (1 - VINTED_FEE)) - buy, 2)
 
 
 # ========================
 # DISCORD
 # ========================
 
-def send_discord(item, resale, profit):
+def alert(item, resale, profit_value):
 
-    message = (
-
+    msg = (
         f"🔥 Flip Found\n\n"
-        f"{item['title']}\n\n"
+        f"{item['title']}\n"
         f"Buy: {item['price']}€\n"
         f"Resale: {resale}€\n"
-        f"Profit: {profit}€\n\n"
+        f"Profit: {profit_value}€\n\n"
         f"{item['url']}"
     )
 
     try:
 
         requests.post(
-
             DISCORD_WEBHOOK,
-            json={"content": message},
-            timeout=30
+            json={"content": msg}
         )
 
-        print("[DISCORD] SENT")
+        print("[ALERT SENT]")
 
-    except Exception as e:
-
-        print(f"[DISCORD ERROR] {e}")
+    except:
+        print("[DISCORD FAILED]")
 
 
 # ========================
-# MAIN LOOP
+# MAIN
 # ========================
 
 def main():
 
-    history = load_file_set(HISTORY_FILE)
+    history = load_set(HISTORY_FILE)
 
-    keywords = get_next_keywords()
+    keywords, stats = choose_keywords()
 
-    total_checked = 0
-    total_profitable = 0
+    total = 0
+    profitable = 0
 
     for keyword in keywords:
 
@@ -323,37 +306,39 @@ def main():
         if not listings:
             continue
 
-        resale_prices = estimate_resale_prices(listings)
+        prices = estimate_prices(listings)
 
-        if len(resale_prices) != len(listings):
+        if len(prices) != len(listings):
             continue
 
-        for item, resale in zip(listings, resale_prices):
+        for item, resale in zip(listings, prices):
 
-            total_checked += 1
+            total += 1
+
+            stats[keyword]["checked"] += 1
 
             if item["url"] in history:
                 continue
 
-            profit = calculate_profit(item["price"], resale)
+            p = profit(item["price"], resale)
 
-            print(
-                f"[CHECK] buy {item['price']} resale {resale} profit {profit}"
-            )
+            print("[CHECK]", item["price"], resale, p)
 
-            if profit >= MIN_PROFIT:
+            if p >= MIN_PROFIT:
 
-                send_discord(item, resale, profit)
+                profitable += 1
 
-                save_to_file(HISTORY_FILE, item["url"])
+                stats[keyword]["profit"] += 1
 
-                total_profitable += 1
+                alert(item, resale, p)
 
-    print(f"[SUMMARY] checked={total_checked} profitable={total_profitable}")
+                save_line(HISTORY_FILE, item["url"])
+
+    save_keyword_stats(stats)
+
+    print("[SUMMARY]", total, profitable)
 
 
-# ========================
-# ENTRY
 # ========================
 
 if __name__ == "__main__":
