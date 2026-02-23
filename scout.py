@@ -11,8 +11,8 @@ from bs4 import BeautifulSoup
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# 🔥 SWITCHED: Using Flash-8B to resolve the 404 SDK error
-MODEL_NAME = "gemini-1.5-flash-8b" 
+# Use exact ID; the SDK handles the 'models/' prefix internally
+MODEL_NAME = "gemini-1.5-flash" 
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
@@ -24,14 +24,6 @@ class Listing:
     price: float
     image_url: str
     item_url: str
-
-@dataclass
-class ProfitAnalysis:
-    listing: Listing
-    resale_price: float
-    net_profit: float
-    reasoning: str
-    score: int
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -46,6 +38,7 @@ def save_history(item_url):
 def get_dynamic_keyword(client):
     prompt = f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the keyword."
     try:
+        # No 'models/' prefix needed for this specific SDK call
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         keyword = response.text.strip().replace("'", "").replace('"', "")
         print(f"[SEARCH] AI Keyword: {keyword}", flush=True)
@@ -62,7 +55,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
-        # 🎯 Targeted selector to find real items and ignore the menu bar
+        # 🎯 TARGET ONLY REAL PRODUCT BOXES
         items = soup.find_all("div", class_="s-item__info")
         
         listings = []
@@ -72,7 +65,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 title_el = item.find("div", class_="s-item__title") or item.find("h3")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 TRASH FILTER: Skip menus and pagination
+                # 🚮 TRASH FILTER
                 trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
                 if not title or any(x in title.lower() for x in trash):
                     continue
@@ -97,10 +90,10 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
         return listings
     except: return []
 
-def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
+def analyse_all_gemini(listings: list[Listing], client) -> list:
     profitable_deals = []
     for l in listings:
-        print(f"[AI] Analyzing: {l.title}...", flush=True)
+        print(f"[AI] Analyzing real item: {l.title}...", flush=True)
         prompt = f"Estimate resale for '{l.title}' at {l.price}€. Return JSON: [{{'resale_price': 35.0, 'reasoning': '...', 'score': 85}}]"
         
         payload = [prompt]
@@ -122,43 +115,34 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
             profit = (resale * (1 - FEE_RATE)) - l.price
             
             if profit >= MIN_NET_PROFIT:
-                profitable_deals.append(ProfitAnalysis(l, resale, round(profit, 2), entry.get("reasoning", ""), int(entry.get("score", 50))))
+                profitable_deals.append({"listing": l, "profit": round(profit, 2)})
         except Exception as e:
             print(f"[AI ERROR] {e}", flush=True)
             
     return profitable_deals
 
-def send_discord_notification(analyses: list[ProfitAnalysis]):
-    webhook_url = os.getenv("DISCORD_WEBHOOK", "")
-    if not webhook_url: return
-    for a in analyses:
-        payload = {
-            "embeds": [{
-                "title": f"💰 DEAL FOUND: {a.listing.title[:100]}", 
-                "url": a.listing.item_url, "color": 65450,
-                "thumbnail": {"url": a.listing.image_url},
-                "fields": [
-                    {"name": "Buy", "value": f"{a.listing.price}€", "inline": True},
-                    {"name": "Profit", "value": f"**{a.net_profit}€**", "inline": True}
-                ]
-            }]
-        }
-        requests.post(webhook_url, json=payload)
-
 if __name__ == "__main__":
     print("--- [START] Bot Active ---", flush=True)
     api_key = os.getenv("GEMINI_API_KEY", "")
     if api_key:
+        # Force the stable version
         client = genai.Client(api_key=api_key)
         seen = load_history()
         keyword = get_dynamic_keyword(client)
         items = scrape_ebay_listings(keyword, seen)
+        
         if items:
-            print(f"[INFO] Analyzing {len(items)} real items...", flush=True)
+            print(f"[INFO] Scanning {len(items)} real products...", flush=True)
             deals = analyse_all_gemini(items, client)
             if deals:
-                send_discord_notification(deals)
-                for d in deals: save_history(d.listing.item_url)
+                webhook_url = os.getenv("DISCORD_WEBHOOK", "")
+                for d in deals:
+                    l = d["listing"]
+                    payload = {"embeds": [{"title": f"💰 DEAL: {l.title[:100]}", "url": l.item_url, "color": 65450,
+                               "fields": [{"name": "Price", "value": f"{l.price}€", "inline": True},
+                                          {"name": "Profit", "value": f"{d['profit']}€", "inline": True}]}]}
+                    requests.post(webhook_url, json=payload)
+                    save_history(l.item_url)
             else: print("[INFO] No profitable items found.", flush=True)
         else: print("[INFO] No new items found on eBay.", flush=True)
     print("--- [FINISH] Cycle Complete ---", flush=True)
