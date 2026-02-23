@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
 NUM_LISTINGS = 3        
-# 🔥 Use the versioned ID to force the SDK to find the model
+# 🔥 This exact string is required to fix your 404 Error
 MODEL_NAME = "gemini-1.5-flash" 
 # ────────────────────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                 title_el = item.find("h3") or item.find("h2")
                 title = title_el.get_text(strip=True) if title_el else ""
                 
-                # 🚮 Advanced Trash Filter
+                # 🚮 Improved Filter to ignore eBay navigation text
                 trash = ["seite", "pagination", "navigation", "feedback", "altersempfehlung", "benachrichtigungen"]
                 if any(x in title.lower() for x in trash):
                     continue
