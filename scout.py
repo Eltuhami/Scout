@@ -11,8 +11,8 @@ from bs4 import BeautifulSoup
 
 # ─── EDIT ONLY THESE VARIABLES ──────────────────────────────────────────
 MAX_BUY_PRICE = 16.0  # Current bank balance
-MIN_NET_PROFIT = 5.0  # Min profit after 15% fees
-NUM_LISTINGS = 1      # Set to 1 to avoid hitting Free Tier quotas
+MIN_NET_PROFIT = 5.0  # Min profit goal
+NUM_LISTINGS = 1      # 1 item per run to keep Free Tier stable
 # ────────────────────────────────────────────────────────────────────────
 
 FEE_RATE = 0.15
@@ -44,20 +44,15 @@ def save_history(item_url):
         f.write(item_url + "\n")
 
 def get_dynamic_keyword(client):
-    """AI Brain: Picks a realistic niche for your budget."""
     prompt = (
         f"You are a professional reseller. My current budget is {MAX_BUY_PRICE}€. "
-        f"Suggest ONE specific item or brand that is REALISTICALLY found for under {MAX_BUY_PRICE}€ "
-        "on eBay and can be flipped for a profit. DO NOT suggest consoles or iPhones. "
-        "Return ONLY the keyword."
+        f"Suggest ONE specific item that realistically sells for under {MAX_BUY_PRICE}€ "
+        "on eBay. No consoles or phones. Return ONLY the keyword."
     )
     try:
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-        keyword = response.text.strip().replace("'", "").replace('"', "")
-        print(f"[AI] Dynamic Search Keyword: {keyword}", flush=True)
-        return keyword
-    except Exception as e:
-        print(f"[AI] Keyword Error: {e}", flush=True)
+        return response.text.strip().replace("'", "").replace('"', "")
+    except:
         return "Lego Minifigure"
 
 def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
@@ -65,12 +60,10 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&url={ebay_url}&device=mobile&render=true"
     
-    print(f"[SCRAPER] Fetching '{keyword}'...", flush=True)
     try:
         response = requests.get(proxy_url, timeout=60)
         soup = BeautifulSoup(response.text, "html.parser")
         items = soup.find_all(["li", "div"], class_=re.compile(r"item|s-item|result"))
-        print(f"[DEBUG] Containers found: {len(items)}", flush=True)
         
         listings = []
         for item in items:
@@ -100,14 +93,10 @@ def scrape_ebay_listings(keyword, seen_items) -> list[Listing]:
                     img_url = img.get("src") or img.get("data-src") or ""
                     listings.append(Listing(title=title, price=price_val, image_url=img_url, item_url=item_url))
             except: continue
-        print(f"[SCRAPER] Successfully parsed {len(listings)} items.", flush=True)
         return listings
-    except Exception as e:
-        print(f"[SCRAPER] Error: {e}", flush=True)
-        return []
+    except: return []
 
 def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
-    """Optimized for Free Tier: Removed image processing to save tokens/quota."""
     payload = ["Analyze resale value for Vinted. Return JSON array: [{'id': 1, 'resale_price': 50.0, 'reasoning': '...', 'score': 85}]"]
     for i, l in enumerate(listings, 1):
         payload.append(f"Item {i}: '{l.title}' - Price: {l.price} €")
@@ -133,9 +122,7 @@ def analyse_all_gemini(listings: list[Listing], client) -> list[ProfitAnalysis]:
                         reasoning=entry.get("reasoning", ""), score=int(entry.get("score", 50))
                     ))
         return profitable
-    except Exception as e:
-        if "429" in str(e):
-            print("[AI] Quota hit. Ending this run to stay safe.", flush=True)
+    except:
         return []
 
 def send_discord_notification(analyses: list[ProfitAnalysis]) -> None:
@@ -169,7 +156,6 @@ if __name__ == "__main__":
         seen_items = load_history()
         keyword = get_dynamic_keyword(client)
         listings = scrape_ebay_listings(keyword, seen_items)
-        
         if listings:
             profitable = analyse_all_gemini(listings, client)
             if profitable:
