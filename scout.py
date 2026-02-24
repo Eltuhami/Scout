@@ -9,7 +9,8 @@ from bs4 import BeautifulSoup
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-MODEL_ID = "gemini-1.5-flash" 
+# Upgraded to 2.5 Flash to resolve the 404 issue
+MODEL_ID = "gemini-2.5-flash" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 # ────────────────────────────────────────────────────────────────────────
@@ -35,7 +36,8 @@ def get_keyword(client):
         return keyword
     except Exception as e:
         print(f"[ERROR] Keyword fail: {e}", flush=True)
-        return "Vintage Lego"
+        # Cheaper fallback keyword to prevent "0 items"
+        return "Pokemon Karte" 
 
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
@@ -52,7 +54,6 @@ def scrape_ebay(keyword, seen):
             title_el = item.select_one(".s-item__title")
             title = title_el.text.strip() if title_el else ""
             
-            # Trash Filter including ChatGPT's bad words
             trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter"]
             if not title or any(x in title.lower() for x in trash):
                 continue
