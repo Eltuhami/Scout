@@ -9,8 +9,7 @@ from bs4 import BeautifulSoup
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-# Upgraded to 2.5 Flash to resolve the 404 issue
-MODEL_ID = "gemini-2.5-flash" 
+MODEL_ID = "gemini-2.0-flash" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 # ────────────────────────────────────────────────────────────────────────
@@ -29,52 +28,57 @@ def get_keyword(client):
     try:
         res = client.models.generate_content(
             model=MODEL_ID, 
-            contents=f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the name."
+            contents=f"Suggest ONE specific collectible (e.g., 'Nintendo DS', 'Lego') under {MAX_BUY_PRICE}€. Return ONLY the name."
         )
         keyword = res.text.strip().replace('"', '')
-        print(f"[SEARCH] Keyword: {keyword}", flush=True)
+        print(f"[SEARCH] AI selected keyword: {keyword}", flush=True)
         return keyword
     except Exception as e:
         print(f"[ERROR] Keyword fail: {e}", flush=True)
-        # Cheaper fallback keyword to prevent "0 items"
-        return "Pokemon Karte" 
+        return "Gameboy" 
 
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}&render=true"
+    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}"
     
+    print(f"[SCRAPER] Contacting eBay for '{keyword}'...", flush=True)
     try:
         resp = requests.get(proxy, timeout=60)
         soup = BeautifulSoup(resp.text, "html.parser")
-        items = soup.select(".s-item__info")
+        
+        # Broadest possible search to ensure we don't miss items
+        items = soup.find_all("li", class_=re.compile(r"s-item"))
+        print(f"[SCRAPER] Found {len(items)} raw HTML elements.", flush=True)
         
         listings = []
         for item in items:
-            title_el = item.select_one(".s-item__title")
+            title_el = item.find(class_="s-item__title")
             title = title_el.text.strip() if title_el else ""
             
-            trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter"]
-            if not title or any(x in title.lower() for x in trash):
+            # Skip the hidden "Shop on eBay" dummy item eBay injects
+            if not title or "Shop on eBay" in title:
                 continue
 
-            link_el = item.select_one(".s-item__link")
+            link_el = item.find("a", class_="s-item__link")
             if not link_el: continue
             item_url = link_el["href"].split("?")[0]
             if item_url in seen: continue
 
-            price_el = item.select_one(".s-item__price")
+            price_el = item.find(class_="s-item__price")
             if not price_el: continue
             
             price_str = re.sub(r'[^\d.,]', '', price_el.text).replace(',', '.')
             try:
                 price = float(price_str)
                 if 0 < price <= MAX_BUY_PRICE:
-                    img_container = item.parent.select_one(".s-item__image-wrapper img")
-                    img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
+                    img_el = item.find("img")
+                    img_url = img_el.get("src") or img_el.get("data-src") or "" if img_el else ""
                     listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
             except: continue
+            
             if len(listings) >= 3: break
+            
         return listings
     except Exception as e: 
         print(f"[SCRAPE ERROR] {e}", flush=True)
@@ -92,7 +96,7 @@ def run_scout():
     
     keyword = get_keyword(client)
     items = scrape_ebay(keyword, history)
-    print(f"[INFO] Found {len(items)} items.", flush=True)
+    print(f"[INFO] Successfully parsed {len(items)} items under budget.", flush=True)
 
     for item in items:
         print(f"[AI] Analyzing: {item['title']}", flush=True)
@@ -123,9 +127,12 @@ def run_scout():
             if profit >= MIN_NET_PROFIT:
                 webhook = os.getenv("DISCORD_WEBHOOK")
                 msg = {"content": f"💰 **DEAL FOUND**\n**Item:** {item['title']}\n**Buy:** {item['price']}€\n**Profit:** {profit}€\n**Link:** {item['url']}"}
-                requests.post(webhook, json=msg)
+                if webhook:
+                    requests.post(webhook, json=msg)
                 save_history(item['url'])
                 print(f"[SUCCESS] Sent to Discord. Profit: {profit}€", flush=True)
+            else:
+                print(f"[INFO] Skipped. Profit too low ({profit}€).", flush=True)
         except Exception as e:
             print(f"[AI ERROR] {e}", flush=True)
 
