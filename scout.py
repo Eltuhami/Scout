@@ -1,333 +1,134 @@
 import os
-import random
+import re
 import json
-import time
 import requests
-from bs4 import BeautifulSoup
 from google import genai
+from google.genai import types
+from bs4 import BeautifulSoup
 
-# ========================
-# CORE CONFIG
-# ========================
-
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
-
-MODEL = "gemini-1.5-flash"
-
-MAX_BUY = 16.0
-MIN_PROFIT = 5.0
-FEE = 0.15
-
-CYCLES_PER_RUN = 4
-KEYWORDS_PER_CYCLE = 3
-LISTINGS_PER_KEYWORD = 6
-
-COOLDOWN_MIN = 20
-COOLDOWN_MAX = 40
-
+# ─── CORE CONFIG ────────────────────────────────────────────────────────
+MAX_BUY_PRICE = 16.0    
+MIN_NET_PROFIT = 5.0    
+MODEL_ID = "gemini-1.5-flash" 
+FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
-STATS_FILE = "keyword_stats.json"
+# ────────────────────────────────────────────────────────────────────────
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r") as f:
+            return set(f.read().splitlines())
+    return set()
 
-# ========================
-# KEYWORDS
-# ========================
+def save_history(url):
+    with open(HISTORY_FILE, "a") as f:
+        f.write(url + "\n")
 
-BASE_KEYWORDS = [
-
-    "Sony Walkman",
-    "iPod Nano",
-    "iPod Classic",
-
-    "Nintendo DS",
-    "Gameboy",
-
-    "Pokemon Sammlung",
-    "YuGiOh Sammlung",
-
-    "Casio Uhr Vintage",
-    "Seiko Uhr",
-
-    "Polaroid Kamera",
-
-    "Lego Star Wars",
-    "Lego Minifiguren",
-
-    "Funko Pop",
-
-    "Retro Taschenrechner"
-]
-
-BAD_WORDS = [
-    "hülle","case","kabel",
-    "adapter","manual",
-    "anleitung","dvd",
-    "cd","buch","ersatzteil"
-]
-
-# ========================
-# FILE HELPERS
-# ========================
-
-def load_set(file):
-
-    if not os.path.exists(file):
-        return set()
-
-    with open(file,"r") as f:
-        return set(f.read().splitlines())
-
-
-def save_line(file,line):
-
-    with open(file,"a") as f:
-        f.write(line+"\n")
-
-
-def load_stats():
-
-    if not os.path.exists(STATS_FILE):
-
-        return {
-            k:{"profit":0,"checked":0}
-            for k in BASE_KEYWORDS
-        }
-
-    with open(STATS_FILE,"r") as f:
-        return json.load(f)
-
-
-def save_stats(stats):
-
-    with open(STATS_FILE,"w") as f:
-        json.dump(stats,f)
-
-# ========================
-# SMART KEYWORD SELECTION
-# ========================
-
-def choose_keywords(stats):
-
-    scored=[]
-
-    for k,v in stats.items():
-
-        score=v["profit"]-(v["checked"]*0.05)
-
-        scored.append((score,k))
-
-    scored.sort(reverse=True)
-
-    best=[k for _,k in scored[:10]]
-
-    return random.sample(best,min(KEYWORDS_PER_CYCLE,len(best)))
-
-# ========================
-# SCRAPER
-# ========================
-
-def scrape(keyword):
-
-    url=(
-        "https://www.ebay.de/sch/i.html"
-        f"?_nkw={keyword}"
-        "&LH_BIN=1"
-        "&_udhi=16"
-        "&_sop=15"
-    )
-
+def get_keyword(client):
     try:
-
-        r=requests.get(
-            "http://api.scraperapi.com",
-            params={
-                "api_key":SCRAPER_API_KEY,
-                "url":url
-            },
-            timeout=60
+        res = client.models.generate_content(
+            model=MODEL_ID, 
+            contents=f"Suggest ONE specific collectible under {MAX_BUY_PRICE}€. Return ONLY the name."
         )
-
-        soup=BeautifulSoup(r.text,"html.parser")
-
-        listings=[]
-
-        for item in soup.select("li.s-item"):
-
-            title=item.select_one(".s-item__title")
-
-            price=item.select_one(".s-item__price")
-
-            link=item.select_one("a.s-item__link")
-
-            if not title or not price or not link:
-                continue
-
-            title_text=title.text.strip()
-
-            if any(x in title_text.lower() for x in BAD_WORDS):
-                continue
-
-            try:
-                price_value=float(
-                    price.text
-                    .replace("€","")
-                    .replace(",",".")
-                    .split()[0]
-                )
-            except:
-                continue
-
-            if price_value>MAX_BUY:
-                continue
-
-            listings.append({
-                "title":title_text,
-                "price":price_value,
-                "url":link["href"]
-            })
-
-            if len(listings)>=LISTINGS_PER_KEYWORD:
-                break
-
-        print("[SCRAPE]",keyword,len(listings))
-
-        return listings
-
+        keyword = res.text.strip().replace('"', '')
+        print(f"[SEARCH] Keyword: {keyword}", flush=True)
+        return keyword
     except Exception as e:
+        print(f"[ERROR] Keyword fail: {e}", flush=True)
+        return "Vintage Lego"
 
-        print("[SCRAPE ERROR]",e)
-        return []
-
-# ========================
-# GEMINI
-# ========================
-
-def estimate(listings):
-
-    if not listings:
-        return []
-
-    prompt="Estimate resale prices in EURO. Only numbers comma separated.\n\n"
-
-    for i,x in enumerate(listings):
-        prompt+=f"{i+1}. {x['title']}\n"
-
+def scrape_ebay(keyword, seen):
+    scraper_key = os.getenv("SCRAPER_API_KEY", "")
+    url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
+    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}&render=true"
+    
     try:
-
-        r=client.models.generate_content(
-            model=MODEL,
-            contents=prompt
-        )
-
-        return [
-            float(x.strip())
-            for x in r.text.split(",")
-        ]
-
-    except:
-
-        return []
-
-# ========================
-# PROFIT
-# ========================
-
-def profit(buy,resale):
-
-    return round(resale*(1-FEE)-buy,2)
-
-# ========================
-# ALERT
-# ========================
-
-def alert(item,resale,p):
-
-    msg=(
-        f"🔥 Flip Found\n\n"
-        f"{item['title']}\n"
-        f"Buy: {item['price']}€\n"
-        f"Resale: {resale}€\n"
-        f"Profit: {p}€\n\n"
-        f"{item['url']}"
-    )
-
-    try:
-        requests.post(DISCORD_WEBHOOK,json={"content":msg})
-    except:
-        pass
-
-# ========================
-# ONE CYCLE
-# ========================
-
-def cycle(stats,history):
-
-    keywords=choose_keywords(stats)
-
-    print("[CYCLE]",keywords)
-
-    for keyword in keywords:
-
-        listings=scrape(keyword)
-
-        if not listings:
-            continue
-
-        prices=estimate(listings)
-
-        if len(prices)!=len(listings):
-            continue
-
-        for item,resale in zip(listings,prices):
-
-            stats[keyword]["checked"]+=1
-
-            if item["url"] in history:
+        resp = requests.get(proxy, timeout=60)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        items = soup.select(".s-item__info")
+        
+        listings = []
+        for item in items:
+            title_el = item.select_one(".s-item__title")
+            title = title_el.text.strip() if title_el else ""
+            
+            # Trash Filter including ChatGPT's bad words
+            trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter"]
+            if not title or any(x in title.lower() for x in trash):
                 continue
 
-            p=profit(item["price"],resale)
+            link_el = item.select_one(".s-item__link")
+            if not link_el: continue
+            item_url = link_el["href"].split("?")[0]
+            if item_url in seen: continue
 
-            print("[CHECK]",p)
+            price_el = item.select_one(".s-item__price")
+            if not price_el: continue
+            
+            price_str = re.sub(r'[^\d.,]', '', price_el.text).replace(',', '.')
+            try:
+                price = float(price_str)
+                if 0 < price <= MAX_BUY_PRICE:
+                    img_container = item.parent.select_one(".s-item__image-wrapper img")
+                    img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
+                    listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
+            except: continue
+            if len(listings) >= 3: break
+        return listings
+    except Exception as e: 
+        print(f"[SCRAPE ERROR] {e}", flush=True)
+        return []
 
-            if p>=MIN_PROFIT:
+def run_scout():
+    print("--- [START] Bot Active ---", flush=True)
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        print("[CRITICAL] Missing API Key!", flush=True)
+        return
 
-                stats[keyword]["profit"]+=1
+    client = genai.Client(api_key=key)
+    history = load_history()
+    
+    keyword = get_keyword(client)
+    items = scrape_ebay(keyword, history)
+    print(f"[INFO] Found {len(items)} items.", flush=True)
 
-                alert(item,resale,p)
+    for item in items:
+        print(f"[AI] Analyzing: {item['title']}", flush=True)
+        try:
+            prompt = (
+                f"Estimate resale value for '{item['title']}' at {item['price']}€. "
+                "Check the image for damage. "
+                "Return ONLY valid JSON: [{'resale_price': 30.0, 'reasoning': '...', 'score': 80}]"
+            )
+            payload = [prompt]
+            if item.get("img_url") and item["img_url"].startswith("http"):
+                try:
+                    img_data = requests.get(item["img_url"], timeout=5).content
+                    payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
+                except: pass
 
-                save_line(HISTORY_FILE,item["url"])
+            res = client.models.generate_content(
+                model=MODEL_ID, 
+                contents=payload,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            
+            data = json.loads(res.text)
+            entry = data[0] if isinstance(data, list) else data
+            resale = float(entry.get("resale_price", 0))
+            profit = round((resale * (1 - FEE_RATE)) - item['price'], 2)
+            
+            if profit >= MIN_NET_PROFIT:
+                webhook = os.getenv("DISCORD_WEBHOOK")
+                msg = {"content": f"💰 **DEAL FOUND**\n**Item:** {item['title']}\n**Buy:** {item['price']}€\n**Profit:** {profit}€\n**Link:** {item['url']}"}
+                requests.post(webhook, json=msg)
+                save_history(item['url'])
+                print(f"[SUCCESS] Sent to Discord. Profit: {profit}€", flush=True)
+        except Exception as e:
+            print(f"[AI ERROR] {e}", flush=True)
 
-# ========================
-# MAIN LOOP
-# ========================
+    print("--- [FINISH] Cycle Complete ---", flush=True)
 
-def main():
-
-    stats=load_stats()
-
-    history=load_set(HISTORY_FILE)
-
-    for i in range(CYCLES_PER_RUN):
-
-        print(f"[RUN CYCLE {i+1}/{CYCLES_PER_RUN}]")
-
-        cycle(stats,history)
-
-        save_stats(stats)
-
-        cooldown=random.randint(
-            COOLDOWN_MIN,
-            COOLDOWN_MAX
-        )
-
-        print("[COOLDOWN]",cooldown)
-
-        time.sleep(cooldown)
-
-# ========================
-
-if __name__=="__main__":
-    main()
+if __name__ == "__main__":
+    run_scout()
