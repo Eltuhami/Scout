@@ -1,34 +1,39 @@
 import os
 import random
 import json
+import time
 import requests
 from bs4 import BeautifulSoup
 from google import genai
 
 # ========================
-# CONFIG
+# CORE CONFIG
 # ========================
 
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL = "gemini-1.5-flash"
 
-MAX_BUY_PRICE = 16.0
+MAX_BUY = 16.0
 MIN_PROFIT = 5.0
-VINTED_FEE = 0.15
+FEE = 0.15
 
-LISTINGS_PER_KEYWORD = 8
-KEYWORDS_PER_RUN = 5
+CYCLES_PER_RUN = 4
+KEYWORDS_PER_CYCLE = 3
+LISTINGS_PER_KEYWORD = 6
+
+COOLDOWN_MIN = 20
+COOLDOWN_MAX = 40
 
 HISTORY_FILE = "history.txt"
-KEYWORD_STATS_FILE = "keyword_stats.json"
+STATS_FILE = "keyword_stats.json"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ========================
-# STARTING KEYWORDS
+# KEYWORDS
 # ========================
 
 BASE_KEYWORDS = [
@@ -36,31 +41,31 @@ BASE_KEYWORDS = [
     "Sony Walkman",
     "iPod Nano",
     "iPod Classic",
+
     "Nintendo DS",
     "Gameboy",
-
-    "Casio Vintage Uhr",
-    "Seiko Uhr",
 
     "Pokemon Sammlung",
     "YuGiOh Sammlung",
 
+    "Casio Uhr Vintage",
+    "Seiko Uhr",
+
     "Polaroid Kamera",
-    "Canon Analog Kamera",
 
     "Lego Star Wars",
     "Lego Minifiguren",
 
     "Funko Pop",
-    "Hot Wheels Sammlung",
 
     "Retro Taschenrechner"
 ]
 
-LOW_VALUE = [
-    "hülle", "case", "kabel", "adapter",
-    "anleitung", "manual", "dvd", "cd",
-    "buch", "ersatzteil"
+BAD_WORDS = [
+    "hülle","case","kabel",
+    "adapter","manual",
+    "anleitung","dvd",
+    "cd","buch","ersatzteil"
 ]
 
 # ========================
@@ -72,71 +77,61 @@ def load_set(file):
     if not os.path.exists(file):
         return set()
 
-    with open(file, "r", encoding="utf-8") as f:
-        return set(x.strip() for x in f)
+    with open(file,"r") as f:
+        return set(f.read().splitlines())
 
 
-def save_line(file, value):
+def save_line(file,line):
 
-    with open(file, "a", encoding="utf-8") as f:
-        f.write(value + "\n")
+    with open(file,"a") as f:
+        f.write(line+"\n")
 
 
-def load_keyword_stats():
+def load_stats():
 
-    if not os.path.exists(KEYWORD_STATS_FILE):
+    if not os.path.exists(STATS_FILE):
 
-        stats = {}
+        return {
+            k:{"profit":0,"checked":0}
+            for k in BASE_KEYWORDS
+        }
 
-        for k in BASE_KEYWORDS:
-            stats[k] = {"profit": 0, "checked": 0}
-
-        return stats
-
-    with open(KEYWORD_STATS_FILE, "r") as f:
+    with open(STATS_FILE,"r") as f:
         return json.load(f)
 
 
-def save_keyword_stats(stats):
+def save_stats(stats):
 
-    with open(KEYWORD_STATS_FILE, "w") as f:
-        json.dump(stats, f)
-
+    with open(STATS_FILE,"w") as f:
+        json.dump(stats,f)
 
 # ========================
-# SELF LEARNING KEYWORD SELECTION
+# SMART KEYWORD SELECTION
 # ========================
 
-def choose_keywords():
+def choose_keywords(stats):
 
-    stats = load_keyword_stats()
+    scored=[]
 
-    scored = []
+    for k,v in stats.items():
 
-    for k, v in stats.items():
+        score=v["profit"]-(v["checked"]*0.05)
 
-        score = v["profit"] - (v["checked"] * 0.1)
-
-        scored.append((score, k))
+        scored.append((score,k))
 
     scored.sort(reverse=True)
 
-    best = [k for _, k in scored[:10]]
+    best=[k for _,k in scored[:10]]
 
-    selected = random.sample(best, min(KEYWORDS_PER_RUN, len(best)))
-
-    print("[KEYWORDS]", selected)
-
-    return selected, stats
-
+    return random.sample(best,min(KEYWORDS_PER_CYCLE,len(best)))
 
 # ========================
-# EBAY SCRAPER (FIXED)
+# SCRAPER
 # ========================
 
-def scrape_ebay(keyword):
+def scrape(keyword):
 
-    url = (
+    url=(
         "https://www.ebay.de/sch/i.html"
         f"?_nkw={keyword}"
         "&LH_BIN=1"
@@ -144,202 +139,195 @@ def scrape_ebay(keyword):
         "&_sop=15"
     )
 
-    payload = {
-        "api_key": SCRAPER_API_KEY,
-        "url": url
-    }
-
     try:
 
-        r = requests.get(
+        r=requests.get(
             "http://api.scraperapi.com",
-            params=payload,
+            params={
+                "api_key":SCRAPER_API_KEY,
+                "url":url
+            },
             timeout=60
         )
 
-        soup = BeautifulSoup(r.text, "html.parser")
+        soup=BeautifulSoup(r.text,"html.parser")
 
-        listings = []
+        listings=[]
 
-        items = soup.select("li.s-item")
+        for item in soup.select("li.s-item"):
 
-        for item in items:
+            title=item.select_one(".s-item__title")
 
-            title_tag = item.select_one(".s-item__title")
+            price=item.select_one(".s-item__price")
 
-            price_tag = item.select_one(".s-item__price")
+            link=item.select_one("a.s-item__link")
 
-            link_tag = item.select_one("a.s-item__link")
-
-            if not title_tag or not price_tag or not link_tag:
+            if not title or not price or not link:
                 continue
 
-            title = title_tag.get_text().strip()
+            title_text=title.text.strip()
 
-            lower = title.lower()
-
-            if any(w in lower for w in LOW_VALUE):
+            if any(x in title_text.lower() for x in BAD_WORDS):
                 continue
-
-            price_text = (
-                price_tag.get_text()
-                .replace("€", "")
-                .replace(",", ".")
-                .split(" ")[0]
-            )
 
             try:
-                price = float(price_text)
+                price_value=float(
+                    price.text
+                    .replace("€","")
+                    .replace(",",".")
+                    .split()[0]
+                )
             except:
                 continue
 
-            if price > MAX_BUY_PRICE:
+            if price_value>MAX_BUY:
                 continue
 
             listings.append({
-
-                "title": title,
-                "price": price,
-                "url": link_tag["href"]
+                "title":title_text,
+                "price":price_value,
+                "url":link["href"]
             })
 
-            if len(listings) >= LISTINGS_PER_KEYWORD:
+            if len(listings)>=LISTINGS_PER_KEYWORD:
                 break
 
-        print(f"[SCRAPER] {keyword}: {len(listings)}")
+        print("[SCRAPE]",keyword,len(listings))
 
         return listings
 
     except Exception as e:
 
-        print("[SCRAPER ERROR]", e)
-
+        print("[SCRAPE ERROR]",e)
         return []
 
-
 # ========================
-# GEMINI BATCH PRICE ESTIMATION
+# GEMINI
 # ========================
 
-def estimate_prices(listings):
+def estimate(listings):
 
     if not listings:
         return []
 
-    prompt = "Estimate resale prices in EURO. Return numbers separated by commas.\n\n"
+    prompt="Estimate resale prices in EURO. Only numbers comma separated.\n\n"
 
-    for i, item in enumerate(listings):
-        prompt += f"{i+1}. {item['title']}\n"
+    for i,x in enumerate(listings):
+        prompt+=f"{i+1}. {x['title']}\n"
 
     try:
 
-        r = client.models.generate_content(
-            model=MODEL_NAME,
+        r=client.models.generate_content(
+            model=MODEL,
             contents=prompt
         )
 
-        prices = [float(x.strip()) for x in r.text.split(",")]
+        return [
+            float(x.strip())
+            for x in r.text.split(",")
+        ]
 
-        return prices
-
-    except Exception as e:
-
-        print("[GEMINI ERROR]", e)
+    except:
 
         return []
-
 
 # ========================
 # PROFIT
 # ========================
 
-def profit(buy, resale):
+def profit(buy,resale):
 
-    return round((resale * (1 - VINTED_FEE)) - buy, 2)
-
+    return round(resale*(1-FEE)-buy,2)
 
 # ========================
-# DISCORD
+# ALERT
 # ========================
 
-def alert(item, resale, profit_value):
+def alert(item,resale,p):
 
-    msg = (
+    msg=(
         f"🔥 Flip Found\n\n"
         f"{item['title']}\n"
         f"Buy: {item['price']}€\n"
         f"Resale: {resale}€\n"
-        f"Profit: {profit_value}€\n\n"
+        f"Profit: {p}€\n\n"
         f"{item['url']}"
     )
 
     try:
-
-        requests.post(
-            DISCORD_WEBHOOK,
-            json={"content": msg}
-        )
-
-        print("[ALERT SENT]")
-
+        requests.post(DISCORD_WEBHOOK,json={"content":msg})
     except:
-        print("[DISCORD FAILED]")
-
+        pass
 
 # ========================
-# MAIN
+# ONE CYCLE
 # ========================
 
-def main():
+def cycle(stats,history):
 
-    history = load_set(HISTORY_FILE)
+    keywords=choose_keywords(stats)
 
-    keywords, stats = choose_keywords()
-
-    total = 0
-    profitable = 0
+    print("[CYCLE]",keywords)
 
     for keyword in keywords:
 
-        listings = scrape_ebay(keyword)
+        listings=scrape(keyword)
 
         if not listings:
             continue
 
-        prices = estimate_prices(listings)
+        prices=estimate(listings)
 
-        if len(prices) != len(listings):
+        if len(prices)!=len(listings):
             continue
 
-        for item, resale in zip(listings, prices):
+        for item,resale in zip(listings,prices):
 
-            total += 1
-
-            stats[keyword]["checked"] += 1
+            stats[keyword]["checked"]+=1
 
             if item["url"] in history:
                 continue
 
-            p = profit(item["price"], resale)
+            p=profit(item["price"],resale)
 
-            print("[CHECK]", item["price"], resale, p)
+            print("[CHECK]",p)
 
-            if p >= MIN_PROFIT:
+            if p>=MIN_PROFIT:
 
-                profitable += 1
+                stats[keyword]["profit"]+=1
 
-                stats[keyword]["profit"] += 1
+                alert(item,resale,p)
 
-                alert(item, resale, p)
+                save_line(HISTORY_FILE,item["url"])
 
-                save_line(HISTORY_FILE, item["url"])
+# ========================
+# MAIN LOOP
+# ========================
 
-    save_keyword_stats(stats)
+def main():
 
-    print("[SUMMARY]", total, profitable)
+    stats=load_stats()
 
+    history=load_set(HISTORY_FILE)
+
+    for i in range(CYCLES_PER_RUN):
+
+        print(f"[RUN CYCLE {i+1}/{CYCLES_PER_RUN}]")
+
+        cycle(stats,history)
+
+        save_stats(stats)
+
+        cooldown=random.randint(
+            COOLDOWN_MIN,
+            COOLDOWN_MAX
+        )
+
+        print("[COOLDOWN]",cooldown)
+
+        time.sleep(cooldown)
 
 # ========================
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
