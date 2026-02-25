@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import random
 import requests
 import urllib.parse
@@ -11,7 +12,7 @@ from bs4 import BeautifulSoup
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-MODEL_ID = "gemini-2.0-flash" # Back to the working 2.0 model
+MODEL_ID = "gemini-2.0-flash" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
@@ -120,7 +121,6 @@ def run_scout():
         print("[CRITICAL] Missing API Key!", flush=True)
         return
 
-    # Using the 2.0 compatible SDK
     client = genai.Client(api_key=key)
     history = load_history()
     
@@ -131,6 +131,10 @@ def run_scout():
     print(f"[INFO] Successfully parsed {len(items)} items.", flush=True)
 
     for item in items:
+        # ADDED DELAY: Forces the bot to wait 15 seconds to respect the free API limits
+        print("[INFO] Waiting 15s for API rate limits...", flush=True)
+        time.sleep(15) 
+        
         print(f"[AI] Analyzing: {item['title'][:40]}...", flush=True)
         try:
             prompt = (
