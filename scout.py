@@ -1,18 +1,14 @@
 import os
 import re
 import json
-import time
 import random
 import requests
 import urllib.parse
-from google import genai
-from google.genai import types
 from bs4 import BeautifulSoup
 
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-MODEL_ID = "gemini-2.0-flash" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
@@ -116,14 +112,12 @@ def scrape_ebay(keyword, seen):
 
 def run_scout():
     print("--- [START] Bot Active ---", flush=True)
-    key = os.getenv("GEMINI_API_KEY")
-    if not key:
-        print("[CRITICAL] Missing API Key!", flush=True)
+    groq_key = os.getenv("GROQ_API_KEY")
+    if not groq_key:
+        print("[CRITICAL] Missing GROQ_API_KEY!", flush=True)
         return
 
-    client = genai.Client(api_key=key)
     history = load_history()
-    
     keyword = random.choice(KEYWORDS)
     print(f"[SEARCH] Hunting for: {keyword}", flush=True)
     
@@ -131,31 +125,41 @@ def run_scout():
     print(f"[INFO] Successfully parsed {len(items)} items.", flush=True)
 
     for item in items:
-        # ADDED DELAY: Forces the bot to wait 15 seconds to respect the free API limits
-        print("[INFO] Waiting 15s for API rate limits...", flush=True)
-        time.sleep(15) 
-        
         print(f"[AI] Analyzing: {item['title'][:40]}...", flush=True)
         try:
             prompt = (
                 f"Estimate resale value for '{item['title']}' at {item['price']}€. "
                 "Check the image for damage. "
-                "Return ONLY valid JSON: [{'resale_price': 30.0, 'reasoning': '...', 'score': 80}]"
-            )
-            payload = [prompt]
-            if item.get("img_url") and item["img_url"].startswith("http"):
-                try:
-                    img_data = requests.get(item["img_url"], timeout=5).content
-                    payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
-                except: pass
-
-            res = client.models.generate_content(
-                model=MODEL_ID, 
-                contents=payload,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+                "Return ONLY valid JSON: [{\"resale_price\": 30.0, \"reasoning\": \"...\", \"score\": 80}]"
             )
             
-            data = json.loads(res.text)
+            # ─── GROQ VISION API CONNECTION ───
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            }
+            
+            content_list = [{"type": "text", "text": prompt}]
+            if item.get("img_url") and item["img_url"].startswith("http"):
+                content_list.append({"type": "image_url", "image_url": {"url": item["img_url"]}})
+                
+            payload = {
+                "model": "llama-3.2-90b-vision-preview",
+                "messages": [{"role": "user", "content": content_list}],
+                "temperature": 0.2
+            }
+            
+            resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+            resp.raise_for_status()
+            
+            # Parse Groq's response
+            response_json = resp.json()
+            raw_ai_text = response_json['choices'][0]['message']['content']
+            
+            # Clean up potential markdown formatting from the AI
+            clean_json_str = raw_ai_text.strip().removeprefix("```json").removesuffix("```").strip()
+            
+            data = json.loads(clean_json_str)
             entry = data[0] if isinstance(data, list) else data
             resale = float(entry.get("resale_price", 0))
             profit = round((resale * (1 - FEE_RATE)) - item['price'], 2)
@@ -170,7 +174,7 @@ def run_scout():
             else:
                 print(f"[INFO] Skipped. Est. Profit: {profit}€", flush=True)
         except Exception as e:
-            print(f"[AI ERROR] {e}", flush=True)
+            print(f"[AI ERROR] Failed to process with Groq: {e}", flush=True)
 
     print("--- [FINISH] Cycle Complete ---", flush=True)
 
