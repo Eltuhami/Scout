@@ -14,9 +14,10 @@ MODEL_ID = "gemini-1.5-flash"
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
+# Ultra-cheap keywords that guarantee hundreds of eBay results
 KEYWORDS = [
-    "Pokemon Karte", "Lego Figur", "Manga Deutsch", "Yugioh Karte", 
-    "Vintage Casio", "Nintendo DS Spiel", "Gameboy Spiel", "Hot Wheels"
+    "Pokemon Common Karte", "Lego Steine Konvolut", "Manga Band 1", 
+    "Yugioh Common", "DVD Konvolut", "Nintendo DS Spiel"
 ]
 # ────────────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,9 @@ def save_history(url):
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}"
+    
+    # ADDED: device=desktop to force the reliable desktop HTML layout
+    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}&device=desktop"
     
     try:
         resp = requests.get(proxy, timeout=60)
@@ -44,16 +47,18 @@ def scrape_ebay(keyword, seen):
         items = soup.find_all(class_=re.compile(r"s-item"))
         print(f"[SCRAPER] Found {len(items)} raw eBay elements on the page.", flush=True)
         
+        if len(items) <= 2:
+            print("[INFO] eBay returned a '0 Results' page for this keyword. It is too strict.", flush=True)
+            return []
+            
         listings = []
         for item in items:
             title_el = item.select_one(".s-item__title")
             title = title_el.text.strip() if title_el else ""
             
-            # Skip hidden dummy items
             if not title or "Shop on eBay" in title or "Neues Angebot" in title:
                 continue
 
-            # Fixed Trash Filter (Removed "OVP" so we don't skip good items)
             trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter", "leerkarton", "anleitung", "defekt"]
             if any(x in title.lower() for x in trash):
                 continue
@@ -61,27 +66,21 @@ def scrape_ebay(keyword, seen):
             price_el = item.select_one(".s-item__price")
             if not price_el: continue
             
-            # FIXED PRICE EXTRACTOR: Safely grab the first German price format
             match = re.search(r"(\d+[\.,]\d{2}|\d+)", price_el.text)
             if not match: continue
                 
             price_str = match.group(1).replace('.', '').replace(',', '.')
             try:
                 price = float(price_str)
-                if price > MAX_BUY_PRICE:
-                    continue # Too expensive
-                if price <= 0:
-                    continue # Invalid
-            except: 
-                continue
+                if price > MAX_BUY_PRICE or price <= 0:
+                    continue 
+            except: continue
 
             link_el = item.select_one(".s-item__link")
             if not link_el: continue
             item_url = link_el["href"].split("?")[0]
-            if item_url in seen: 
-                continue
+            if item_url in seen: continue
 
-            # If it passes all tests, keep it!
             img_container = item.select_one(".s-item__image-wrapper img")
             img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
             
