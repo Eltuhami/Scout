@@ -10,11 +10,10 @@ from bs4 import BeautifulSoup
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-MODEL_ID = "gemini-1.5-flash" # Stable model with 1,500 free daily requests
+MODEL_ID = "gemini-1.5-flash" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
-# Keywords that actually have high volume under 16€
 KEYWORDS = [
     "Pokemon Karte", "Lego Figur", "Manga Deutsch", "Yugioh Karte", 
     "Vintage Casio", "Nintendo DS Spiel", "Gameboy Spiel", "Hot Wheels"
@@ -34,50 +33,64 @@ def save_history(url):
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    
-    # Removed render=true to stop ScraperAPI from returning blank pages
     proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}"
     
     try:
         resp = requests.get(proxy, timeout=60)
         soup = BeautifulSoup(resp.text, "html.parser")
         
-        # X-Ray Logging: Print the page title to ensure we aren't blocked
-        page_title = soup.title.text if soup.title else "No Title"
-        print(f"[SCRAPER] Page Title: {page_title}", flush=True)
+        print(f"[SCRAPER] Page Title: {soup.title.text if soup.title else 'No Title'}", flush=True)
         
         items = soup.find_all(class_=re.compile(r"s-item"))
-        
-        # Filter out the invisible "Shop on eBay" dummy item
-        items = [i for i in items if i.select_one(".s-item__title") and "Shop on eBay" not in i.select_one(".s-item__title").text]
+        print(f"[SCRAPER] Found {len(items)} raw eBay elements on the page.", flush=True)
         
         listings = []
         for item in items:
             title_el = item.select_one(".s-item__title")
             title = title_el.text.strip() if title_el else ""
             
-            # Expanded filter to ignore empty boxes and manuals
-            trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter", "leerkarton", "ovp", "anleitung"]
-            if not title or any(x in title.lower() for x in trash):
+            # Skip hidden dummy items
+            if not title or "Shop on eBay" in title or "Neues Angebot" in title:
+                continue
+
+            # Fixed Trash Filter (Removed "OVP" so we don't skip good items)
+            trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter", "leerkarton", "anleitung", "defekt"]
+            if any(x in title.lower() for x in trash):
+                continue
+
+            price_el = item.select_one(".s-item__price")
+            if not price_el: continue
+            
+            # FIXED PRICE EXTRACTOR: Safely grab the first German price format
+            match = re.search(r"(\d+[\.,]\d{2}|\d+)", price_el.text)
+            if not match: continue
+                
+            price_str = match.group(1).replace('.', '').replace(',', '.')
+            try:
+                price = float(price_str)
+                if price > MAX_BUY_PRICE:
+                    continue # Too expensive
+                if price <= 0:
+                    continue # Invalid
+            except: 
                 continue
 
             link_el = item.select_one(".s-item__link")
             if not link_el: continue
             item_url = link_el["href"].split("?")[0]
-            if item_url in seen: continue
+            if item_url in seen: 
+                continue
 
-            price_el = item.select_one(".s-item__price")
-            if not price_el: continue
+            # If it passes all tests, keep it!
+            img_container = item.select_one(".s-item__image-wrapper img")
+            img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
             
-            price_str = re.sub(r'[^\d.,]', '', price_el.text).replace(',', '.')
-            try:
-                price = float(price_str)
-                if 0 < price <= MAX_BUY_PRICE:
-                    img_container = item.select_one(".s-item__image-wrapper img")
-                    img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
-                    listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
-            except: continue
-            if len(listings) >= 3: break
+            print(f"  [+] Valid Item Found: {title[:40]}... ({price}€)", flush=True)
+            listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
+            
+            if len(listings) >= 3: 
+                break
+                
         return listings
     except Exception as e: 
         print(f"[SCRAPE ERROR] {e}", flush=True)
@@ -97,7 +110,7 @@ def run_scout():
     print(f"[SEARCH] Hunting for: {keyword}", flush=True)
     
     items = scrape_ebay(keyword, history)
-    print(f"[INFO] Found {len(items)} items matching criteria.", flush=True)
+    print(f"[INFO] Successfully parsed {len(items)} items matching criteria.", flush=True)
 
     for item in items:
         print(f"[AI] Analyzing: {item['title'][:40]}...", flush=True)
