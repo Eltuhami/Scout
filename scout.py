@@ -4,13 +4,15 @@ import json
 import random
 import requests
 import urllib.parse
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from bs4 import BeautifulSoup
 
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-MODEL_ID = "gemini-1.5-flash" 
+# Hyper-specific model name to bypass the 404 NOT_FOUND bug
+MODEL_ID = "gemini-1.5-flash-8b" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
@@ -119,9 +121,8 @@ def run_scout():
         print("[CRITICAL] Missing API Key!", flush=True)
         return
 
-    # Using the stable SDK configuration
-    genai.configure(api_key=key)
-    model = genai.GenerativeModel(MODEL_ID)
+    # Using the correct, installed SDK
+    client = genai.Client(api_key=key)
     history = load_history()
     
     keyword = random.choice(KEYWORDS)
@@ -142,12 +143,13 @@ def run_scout():
             if item.get("img_url") and item["img_url"].startswith("http"):
                 try:
                     img_data = requests.get(item["img_url"], timeout=5).content
-                    payload.append({"mime_type": "image/jpeg", "data": img_data})
+                    payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
                 except: pass
 
-            res = model.generate_content(
-                payload,
-                generation_config=genai.GenerationConfig(response_mime_type="application/json")
+            res = client.models.generate_content(
+                model=MODEL_ID, 
+                contents=payload,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
             )
             
             data = json.loads(res.text)
