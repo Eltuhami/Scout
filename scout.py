@@ -31,23 +31,24 @@ def save_history(url):
 def get_dynamic_keyword(groq_key):
     try:
         headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        # We now explicitly tell it NOT to use "Sammlerstücke" and to try a random category
+        # Force the AI to pick a new category every time
+        categories = ["Vintage Tech", "Board Games", "Retro Gaming", "Tools", "Cameras", "Media"]
+        target = random.choice(categories)
+        
         prompt = (
-            "Give me ONE unique German eBay search term for high-profit used bundles. "
-            "Do NOT use the word 'Sammlerstücke'. "
-            "Try categories like: 'Elektronik', 'Werkzeug', 'Hobby', 'Kamera', or 'Spielzeug'. "
-            "Return ONLY the word."
+            f"Think of ONE specific German search term for used {target} bundles on eBay. "
+            "Do NOT use 'Sammlerstücke'. Return ONLY the word (e.g., 'Objektiv', 'Schraubstock', 'Kartenspiel')."
         )
+        
         payload = {
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-            "temperature": 0.9, # Increased to force variety
+            "temperature": 1.0, # High creativity for keywords
             "max_tokens": 20
         }
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
-        word = resp.json()['choices'][0]['message']['content'].strip('."\' \n')
-        return word if len(word) > 1 else "Konvolut"
-    except Exception: return "Konvolut"
+        return resp.json()['choices'][0]['message']['content'].strip('."\' \n')
+    except: return "Konvolut"
 
 def scrape_ebay_details(item_url):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
