@@ -153,7 +153,7 @@ def run_scout():
                     print(f"  [!] Could not download image: {e}", flush=True)
                 
             payload = {
-                "model": "llama-3.2-90b-vision-instruct", # Updated to the current, supported model
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct", # Updated to the active Groq multimodal model
                 "messages": [{"role": "user", "content": content_list}],
                 "temperature": 0.2,
                 "max_tokens": 1024 
