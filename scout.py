@@ -7,11 +7,11 @@ import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 
-# ─── CORE CONFIG ────────────────────────────────────────────────────────
-MAX_BUY_PRICE = 16.0    
-MIN_NET_PROFIT = 7.0       # Higher buffer for safety
-CONFIDENCE_THRESHOLD = 90  # Zero gambling: 90% or higher
-FEE_RATE = 0.15
+# ─── CORE CONFIG (TESTING MODE) ─────────────────────────────────────────
+MAX_BUY_PRICE = 40.0       # Higher budget to find wider profit margins
+MIN_NET_PROFIT = 10.0      # Increased reward for the higher spend
+CONFIDENCE_THRESHOLD = 90  
+FEE_RATE = 0.15            # Set to 0.00 if you sell as a private person
 HISTORY_FILE = "history.txt"
 # ────────────────────────────────────────────────────────────────────────
 
@@ -22,19 +22,18 @@ def load_history():
     return set()
 
 def save_history(url):
-    """Saves URL immediately to blacklist it from future runs"""
     with open(HISTORY_FILE, "a") as f:
         f.write(url + "\n")
 
 def get_dynamic_keyword(groq_key):
-    """Forces variety to avoid 'Sammlerstücke' loops"""
     try:
-        niches = ["Vintage Tech", "Retro Gaming", "Hand Tools", "Photography", "Board Games"]
+        # Focusing on niches where 40€ buys high-value bundles
+        niches = ["Elektronik Konvolut", "Profi Werkzeug", "Spielepaket", "Kamera Zubehör", "Modellbau"]
         selected = random.choice(niches)
         headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
         prompt = (
-            f"Think of ONE specific German eBay search term for used {selected} bundles. "
-            "Do NOT use 'Sammlerstücke'. Return ONLY the word (e.g., 'Objektiv', 'Schraubstock')."
+            f"Think of ONE specific German search term for used {selected} on eBay. "
+            "Avoid 'Sammlerstücke'. Return ONLY the word (e.g., 'Akkuschrauber', 'Spiegelreflex')."
         )
         payload = {
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -47,7 +46,6 @@ def get_dynamic_keyword(groq_key):
     except: return "Konvolut"
 
 def scrape_ebay_details(item_url):
-    """Pulls full description for the AI to audit"""
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     payload = {'api_key': scraper_key, 'url': item_url, 'country_code': 'de'}
     try:
@@ -87,7 +85,7 @@ def scrape_ebay_search(keyword, seen):
     except: return []
 
 def run_scout():
-    print("--- [START] Strict Audit Mode ---", flush=True)
+    print("--- [START] High-Limit Audit ---", flush=True)
     groq_key = os.getenv("GROQ_API_KEY")
     if not groq_key: return
     history = load_history()
@@ -98,15 +96,14 @@ def run_scout():
     for item in items:
         try:
             description = scrape_ebay_details(item['url'])
-            
-            # IMMEDIATELY blacklist URL so we don't audit it again
-            save_history(item['url'])
+            save_history(item['url']) # Blacklist immediately
 
             prompt = (
-                f"STRICT AUDIT - ZERO GAMBLING.\n"
+                f"STRICT AUDIT - HIGH BUDGET MODE.\n"
                 f"Item: {item['title']}\n"
                 f"Description: {description}\n"
                 f"Cost: {item['price']}€\n\n"
+                f"Analyze if reselling this for profit is viable. MIN PROFIT: {MIN_NET_PROFIT}€.\n"
                 "Return JSON ONLY: {\"resale_price\": 0.0, \"confidence\": 0, \"reasoning\": \"...\"}"
             )
             
@@ -126,11 +123,11 @@ def run_scout():
             
             if profit >= MIN_NET_PROFIT and conf >= CONFIDENCE_THRESHOLD:
                 webhook = os.getenv("DISCORD_WEBHOOK")
-                msg = {"content": f"✅ **CERTIFIED DEAL**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Audit:** {data.get('reasoning')}\n**Link:** {item['url']}"}
+                msg = {"content": f"🚀 **HIGH-VALUE DEAL**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Profit:** {profit}€\n**Link:** {item['url']}"}
                 if webhook: requests.post(webhook, json=msg)
-                print(f"[CERTIFIED] {item['title']} - Profit: {profit}€", flush=True)
+                print(f"[WIN] {item['title']} - Profit: {profit}€", flush=True)
             else:
-                print(f"[REJECTED] Confidence: {conf}% | Profit: {profit}€", flush=True)
+                print(f"[REJECT] Conf: {conf}% | Profit: {profit}€", flush=True)
         except: continue
     print("--- [FINISH] ---", flush=True)
 
