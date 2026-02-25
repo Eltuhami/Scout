@@ -35,10 +35,8 @@ def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     safe_keyword = urllib.parse.quote(keyword)
     
-    # We add the budget here again
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
-    # Simple proxy payload - no JS rendering needed for the /itm/ method
     payload = {
         'api_key': scraper_key,
         'url': ebay_url,
@@ -51,7 +49,6 @@ def scrape_ebay(keyword, seen):
         
         print(f"[SCRAPER] Page Title: {soup.title.text if soup.title else 'No Title'}", flush=True)
         
-        # FOOLPROOF METHOD: Find every single link on the page that goes to a product
         item_links = soup.find_all("a", href=re.compile(r"/itm/"))
         print(f"[SCRAPER] Found {len(item_links)} product links using /itm/ method.", flush=True)
         
@@ -62,57 +59,73 @@ def scrape_ebay(keyword, seen):
             
         listings = []
         processed_urls = set()
+        skipped_expensive = 0
         
         for link_el in item_links:
-            item_url = link_el["href"].split("?")[0]
-            
-            # Skip duplicates on the same page and already seen items
-            if item_url in processed_urls or item_url in seen:
-                continue
-            processed_urls.add(item_url)
-            
-            # Extract title (usually inside the link or a nearby heading)
-            title = link_el.text.strip()
-            if not title and link_el.parent:
-                title = link_el.parent.text.strip()
-                
-            if not title or "Shop on eBay" in title or "Neues Angebot" in title:
-                continue
-
-            trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter", "leerkarton", "anleitung", "defekt"]
-            if any(x in title.lower() for x in trash):
-                continue
-
-            # Look for the price by scanning the text of the link's parent container
-            container = link_el.find_parent(["div", "li"])
-            if not container: continue
-            
-            match = re.search(r"EUR\s*(\d+[\.,]\d{2}|\d+)", container.text)
-            if not match:
-                # Try without the EUR prefix
-                match = re.search(r"(\d+[\.,]\d{2}|\d+)\s*€", container.text)
-            
-            if not match: continue
-                
-            price_str = match.group(1).replace('.', '').replace(',', '.')
             try:
-                price = float(price_str)
-                if price > MAX_BUY_PRICE or price <= 0:
-                    continue 
-            except: continue
-
-            # Extract image from the container
-            img_url = ""
-            img_el = container.find("img")
-            if img_el:
-                img_url = img_el.get("src") or img_el.get("data-src") or ""
-            
-            print(f"  [+] Cheap Item Found: {title[:40]}... ({price}€)", flush=True)
-            listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
-            
-            if len(listings) >= 3: 
-                break
+                item_url = link_el["href"].split("?")[0]
                 
+                if item_url in processed_urls or item_url in seen:
+                    continue
+                processed_urls.add(item_url)
+                
+                # Smart Container Expansion: Climb the HTML tree to find the price box
+                container = link_el
+                for _ in range(5):
+                    if container.parent and not re.search(r"(EUR|€)", container.text):
+                        container = container.parent
+                        
+                raw_text = container.text.replace('\xa0', ' ')
+                
+                # Extract Title
+                title = link_el.text.strip()
+                if not title:
+                    img = container.find("img")
+                    title = img.get("alt", "") if img else ""
+                    
+                # Clean up title just in case it grabbed the whole box text
+                title = title.split('\n')[0].strip()
+                    
+                if not title or "Shop on eBay" in title or "Neues Angebot" in title:
+                    continue
+
+                trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter", "leerkarton", "anleitung", "defekt"]
+                if any(x in title.lower() for x in trash):
+                    continue
+
+                # Robust Price Search
+                match = re.search(r"(?:EUR|€)\s*(\d+[\.,]\d{2}|\d+)", raw_text)
+                if not match:
+                    match = re.search(r"(\d+[\.,]\d{2}|\d+)\s*(?:EUR|€)", raw_text)
+                
+                if not match: continue
+                    
+                price_str = match.group(1).replace('.', '').replace(',', '.')
+                price = float(price_str)
+                
+                if price > MAX_BUY_PRICE:
+                    skipped_expensive += 1
+                    continue 
+                if price <= 0:
+                    continue 
+
+                # Extract image
+                img_url = ""
+                img_el = container.find("img")
+                if img_el:
+                    img_url = img_el.get("src") or img_el.get("data-src") or ""
+                
+                print(f"  [+] Valid Item: {title[:40]}... ({price}€)", flush=True)
+                listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
+                
+                if len(listings) >= 3: 
+                    break
+            except:
+                continue
+                
+        if not listings:
+            print(f"[INFO] Searched {len(item_links)} links. {skipped_expensive} were over {MAX_BUY_PRICE}€. The rest lacked clear titles/prices.", flush=True)
+            
         return listings
     except Exception as e: 
         print(f"[SCRAPE ERROR] {e}", flush=True)
