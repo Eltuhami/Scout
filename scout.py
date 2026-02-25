@@ -29,21 +29,25 @@ def save_history(url):
 def get_dynamic_keyword(groq_key):
     try:
         headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        prompt = "You are a German eBay flipper. Reply with exactly ONE highly specific, low-competition German search term to find cheap, undervalued item bundles (e.g., 'Kellerfund', 'Dachbodenfund', 'Sammlung Auflösung', 'Gameboy Kiste', or common typos like 'Nintndo'). Return ONLY the search term, no punctuation or extra words."
+        prompt = "Reply with exactly ONE German search term for cheap eBay bundles (e.g., 'Sammlung', 'Kellerfund', 'Konvolut'). Return ONLY the word."
         
         payload = {
-            "model": "llama3-8b-8192", # Using Groq's blazing fast text model for the brainstorm
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.9 # High temperature so it picks a completely new word every 10 minutes
+            "model": "meta-llama/llama-4-scout-17b-16e-instruct", # Use the proven working model
+            "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+            "temperature": 0.8,
+            "max_tokens": 20 # Keep it short to save credits
         }
         
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
-        resp.raise_for_status()
+        
+        if not resp.ok:
+            print(f"[DEBUG] Groq Brainstorm Error: {resp.text}", flush=True)
+            return "Konvolut"
+
         word = resp.json()['choices'][0]['message']['content'].strip('."\' \n')
-        return word if word else "Kellerfund"
+        return word if word else "Konvolut"
     except Exception as e:
-        print(f"[WARN] AI Keyword failed, using fallback. ({e})", flush=True)
-        return "Konvolut" # Safety net so the bot never stops running
+        return "Konvolut"
 
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
