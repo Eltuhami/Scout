@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import base64
 import random
 import requests
 import urllib.parse
@@ -133,30 +134,42 @@ def run_scout():
                 "Return ONLY valid JSON: [{\"resale_price\": 30.0, \"reasoning\": \"...\", \"score\": 80}]"
             )
             
-            # ─── GROQ VISION API CONNECTION ───
             headers = {
                 "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json"
             }
             
             content_list = [{"type": "text", "text": prompt}]
+            
+            # The Fix: We download the image ourselves and encode it to Base64
             if item.get("img_url") and item["img_url"].startswith("http"):
-                content_list.append({"type": "image_url", "image_url": {"url": item["img_url"]}})
+                try:
+                    img_resp = requests.get(item["img_url"], timeout=5)
+                    img_b64 = base64.b64encode(img_resp.content).decode('utf-8')
+                    content_list.append({
+                        "type": "image_url", 
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    })
+                except Exception as e:
+                    print(f"  [!] Could not download image: {e}", flush=True)
                 
             payload = {
                 "model": "llama-3.2-90b-vision-preview",
                 "messages": [{"role": "user", "content": content_list}],
-                "temperature": 0.2
+                "temperature": 0.2,
+                "max_tokens": 1024 # Required by some Groq vision models
             }
             
             resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
-            resp.raise_for_status()
             
-            # Parse Groq's response
+            # If Groq throws an error, print the EXACT reason why
+            if not resp.ok:
+                print(f"[AI ERROR] Groq rejected the request. Reason: {resp.text}", flush=True)
+                continue
+                
             response_json = resp.json()
             raw_ai_text = response_json['choices'][0]['message']['content']
             
-            # Clean up potential markdown formatting from the AI
             clean_json_str = raw_ai_text.strip().removeprefix("```json").removesuffix("```").strip()
             
             data = json.loads(clean_json_str)
@@ -173,8 +186,11 @@ def run_scout():
                 print(f"[SUCCESS] Profit: {profit}€", flush=True)
             else:
                 print(f"[INFO] Skipped. Est. Profit: {profit}€", flush=True)
+                
+        except json.JSONDecodeError:
+            print(f"[AI ERROR] Groq did not return valid JSON. Raw output: {raw_ai_text[:100]}...", flush=True)
         except Exception as e:
-            print(f"[AI ERROR] Failed to process with Groq: {e}", flush=True)
+            print(f"[AI ERROR] {e}", flush=True)
 
     print("--- [FINISH] Cycle Complete ---", flush=True)
 
