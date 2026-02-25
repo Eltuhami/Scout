@@ -16,7 +16,7 @@ FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
 KEYWORDS = [
-    "Pokemon Karte", "Lego Steine Konvolut", "Manga Band 1", 
+    "Pokemon Karte", "Lego Steine", "Manga Deutsch", 
     "Yugioh Karte", "Nintendo DS Spiel", "Gameboy Spiel"
 ]
 # ────────────────────────────────────────────────────────────────────────
@@ -35,42 +35,47 @@ def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     safe_keyword = urllib.parse.quote(keyword)
     
-    # Put the 16€ budget limit back into the URL so eBay filters the trash for us
+    # We add the budget here again
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
-    # CRITICAL: ScraperAPI parameters to force eBay to load the product grid
+    # Simple proxy payload - no JS rendering needed for the /itm/ method
     payload = {
         'api_key': scraper_key,
         'url': ebay_url,
-        'render': 'true',           # Wait for JavaScript to load the items
-        'device_type': 'desktop',   # Force standard Desktop HTML layout
-        'country_code': 'de'        # Connect using a German IP
+        'country_code': 'de'
     }
     
     try:
-        # Increased timeout to 90s because rendering JS takes a little longer
-        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=90)
+        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
         soup = BeautifulSoup(resp.text, "html.parser")
         
         print(f"[SCRAPER] Page Title: {soup.title.text if soup.title else 'No Title'}", flush=True)
         
-        # Target the info box specifically to avoid hidden background tags
-        items = soup.find_all("div", class_=re.compile(r"s-item__info"))
-        if not items:
-            items = soup.find_all("li", class_=re.compile(r"s-item"))
-            
-        print(f"[SCRAPER] Found {len(items)} raw eBay elements on the page.", flush=True)
+        # FOOLPROOF METHOD: Find every single link on the page that goes to a product
+        item_links = soup.find_all("a", href=re.compile(r"/itm/"))
+        print(f"[SCRAPER] Found {len(item_links)} product links using /itm/ method.", flush=True)
         
-        if len(items) <= 2:
+        if not item_links:
             clean_text = re.sub(r'\s+', ' ', soup.text).strip()
-            print(f"[DEBUG] eBay Page Dump: {clean_text[:300]}...", flush=True)
+            print(f"[DEBUG] eBay Page Dump: {clean_text[:500]}...", flush=True)
             return []
             
         listings = []
-        for item in items:
-            title_el = item.select_one(".s-item__title") or item.find("h3")
-            title = title_el.text.strip() if title_el else ""
+        processed_urls = set()
+        
+        for link_el in item_links:
+            item_url = link_el["href"].split("?")[0]
             
+            # Skip duplicates on the same page and already seen items
+            if item_url in processed_urls or item_url in seen:
+                continue
+            processed_urls.add(item_url)
+            
+            # Extract title (usually inside the link or a nearby heading)
+            title = link_el.text.strip()
+            if not title and link_el.parent:
+                title = link_el.parent.text.strip()
+                
             if not title or "Shop on eBay" in title or "Neues Angebot" in title:
                 continue
 
@@ -78,10 +83,15 @@ def scrape_ebay(keyword, seen):
             if any(x in title.lower() for x in trash):
                 continue
 
-            price_el = item.select_one(".s-item__price")
-            if not price_el: continue
+            # Look for the price by scanning the text of the link's parent container
+            container = link_el.find_parent(["div", "li"])
+            if not container: continue
             
-            match = re.search(r"(\d+[\.,]\d{2}|\d+)", price_el.text)
+            match = re.search(r"EUR\s*(\d+[\.,]\d{2}|\d+)", container.text)
+            if not match:
+                # Try without the EUR prefix
+                match = re.search(r"(\d+[\.,]\d{2}|\d+)\s*€", container.text)
+            
             if not match: continue
                 
             price_str = match.group(1).replace('.', '').replace(',', '.')
@@ -91,20 +101,11 @@ def scrape_ebay(keyword, seen):
                     continue 
             except: continue
 
-            # Find the link dynamically depending on which element the scraper grabbed
-            link_el = item.select_one(".s-item__link")
-            if not link_el and item.parent:
-                link_el = item.parent.select_one(".s-item__link")
-            if not link_el: continue
-                
-            item_url = link_el["href"].split("?")[0]
-            if item_url in seen: continue
-
-            img_container = item.select_one(".s-item__image-wrapper img")
-            if not img_container and item.parent:
-                img_container = item.parent.select_one(".s-item__image-wrapper img")
-                
-            img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
+            # Extract image from the container
+            img_url = ""
+            img_el = container.find("img")
+            if img_el:
+                img_url = img_el.get("src") or img_el.get("data-src") or ""
             
             print(f"  [+] Cheap Item Found: {title[:40]}... ({price}€)", flush=True)
             listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
