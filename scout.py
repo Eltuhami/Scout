@@ -12,11 +12,7 @@ MAX_BUY_PRICE = 16.0
 MIN_NET_PROFIT = 5.0    
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
-
-KEYWORDS = [
-    "Pokemon Karte", "Lego Steine", "Manga Deutsch", 
-    "Yugioh Karte", "Nintendo DS Spiel", "Gameboy Spiel"
-]
+# No more static keywords! Groq handles it all now.
 # ────────────────────────────────────────────────────────────────────────
 
 def load_history():
@@ -29,11 +25,33 @@ def save_history(url):
     with open(HISTORY_FILE, "a") as f:
         f.write(url + "\n")
 
+# Phase 1: The AI Brainstorm
+def get_dynamic_keyword(groq_key):
+    try:
+        headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+        prompt = "You are a German eBay flipper. Reply with exactly ONE highly specific, low-competition German search term to find cheap, undervalued item bundles (e.g., 'Kellerfund', 'Dachbodenfund', 'Sammlung Auflösung', 'Gameboy Kiste', or common typos like 'Nintndo'). Return ONLY the search term, no punctuation or extra words."
+        
+        payload = {
+            "model": "llama3-8b-8192", # Using Groq's blazing fast text model for the brainstorm
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.9 # High temperature so it picks a completely new word every 10 minutes
+        }
+        
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
+        resp.raise_for_status()
+        word = resp.json()['choices'][0]['message']['content'].strip('."\' \n')
+        return word if word else "Kellerfund"
+    except Exception as e:
+        print(f"[WARN] AI Keyword failed, using fallback. ({e})", flush=True)
+        return "Konvolut" # Safety net so the bot never stops running
+
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     safe_keyword = urllib.parse.quote(keyword)
     
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
+    # Phase 2: The Junk Filter 
+    # Added &LH_ItemCondition=3000|7000 to strictly force "Used" or "For Parts"
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000"
     
     payload = {
         'api_key': scraper_key,
@@ -119,7 +137,9 @@ def run_scout():
         return
 
     history = load_history()
-    keyword = random.choice(KEYWORDS)
+    
+    # Generate the dynamic keyword right before scraping
+    keyword = get_dynamic_keyword(groq_key)
     print(f"[SEARCH] Hunting for: {keyword}", flush=True)
     
     items = scrape_ebay(keyword, history)
@@ -153,7 +173,7 @@ def run_scout():
                     print(f"  [!] Could not download image: {e}", flush=True)
                 
             payload = {
-                "model": "meta-llama/llama-4-scout-17b-16e-instruct", # Updated to the active Groq multimodal model
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct", 
                 "messages": [{"role": "user", "content": content_list}],
                 "temperature": 0.2,
                 "max_tokens": 1024 
@@ -177,7 +197,7 @@ def run_scout():
             
             if profit >= MIN_NET_PROFIT:
                 webhook = os.getenv("DISCORD_WEBHOOK")
-                msg = {"content": f"💰 **DEAL FOUND**\n**Item:** {item['title']}\n**Buy:** {item['price']}€\n**Profit:** {profit}€\n**Link:** {item['url']}"}
+                msg = {"content": f"💰 **DEAL FOUND**\n**Search Term:** {keyword}\n**Item:** {item['title']}\n**Buy:** {item['price']}€\n**Profit:** {profit}€\n**Link:** {item['url']}"}
                 if webhook:
                     requests.post(webhook, json=msg)
                 save_history(item['url'])
