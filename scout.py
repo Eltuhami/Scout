@@ -47,13 +47,24 @@ def get_dynamic_keyword(groq_key):
 
 def scrape_ebay_details(item_url):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    payload = {'api_key': scraper_key, 'url': item_url, 'country_code': 'de'}
+    # Adding render=true to handle 2026 dynamic eBay content
+    payload = {
+        'api_key': scraper_key, 
+        'url': item_url, 
+        'country_code': 'de',
+        'render': 'true' 
+    }
     try:
-        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=40)
+        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
+        if resp.status_code != 200:
+            return f"Error: ScraperAPI returned status {resp.status_code}"
+            
         soup = BeautifulSoup(resp.text, "html.parser")
-        desc_div = soup.find("div", {"id": "ds_div"}) or soup.find("div", {"class": "d-item-description"})
-        return desc_div.text.strip()[:2000] if desc_div else "No description."
-    except: return "Error loading description."
+        # Updated selectors for 2026 eBay layout
+        desc_div = soup.select_one("#ds_div, .d-item-description, .x-item-description-child")
+        return desc_div.text.strip()[:2500] if desc_div else "Description not found on page."
+    except Exception as e: 
+        return f"Scraper Error: {str(e)}"
 
 def scrape_ebay_search(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
