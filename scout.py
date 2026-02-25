@@ -3,16 +3,13 @@ import re
 import json
 import random
 import requests
+import base64
 import urllib.parse
-from google import genai
-from google.genai import types
 from bs4 import BeautifulSoup
 
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-# Hyper-specific model name to bypass the 404 NOT_FOUND bug
-MODEL_ID = "gemini-1.5-flash-8b" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
@@ -51,7 +48,7 @@ def scrape_ebay(keyword, seen):
         print(f"[SCRAPER] Page Title: {soup.title.text if soup.title else 'No Title'}", flush=True)
         
         item_links = soup.find_all("a", href=re.compile(r"/itm/"))
-        print(f"[SCRAPER] Found {len(item_links)} product links using /itm/ method.", flush=True)
+        print(f"[SCRAPER] Found {len(item_links)} product links.", flush=True)
         
         if not item_links:
             return []
@@ -121,15 +118,12 @@ def run_scout():
         print("[CRITICAL] Missing API Key!", flush=True)
         return
 
-    # Using the correct, installed SDK
-    client = genai.Client(api_key=key)
     history = load_history()
-    
     keyword = random.choice(KEYWORDS)
     print(f"[SEARCH] Hunting for: {keyword}", flush=True)
     
     items = scrape_ebay(keyword, history)
-    print(f"[INFO] Successfully parsed {len(items)} items matching criteria.", flush=True)
+    print(f"[INFO] Successfully parsed {len(items)} items.", flush=True)
 
     for item in items:
         print(f"[AI] Analyzing: {item['title'][:40]}...", flush=True)
@@ -139,20 +133,37 @@ def run_scout():
                 "Check the image for damage. "
                 "Return ONLY valid JSON: [{'resale_price': 30.0, 'reasoning': '...', 'score': 80}]"
             )
-            payload = [prompt]
+            
+            # ─── DIRECT REST API CONNECTION (Bypasses all SDK Bugs) ───
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+            
+            parts = [{"text": prompt}]
+            
             if item.get("img_url") and item["img_url"].startswith("http"):
                 try:
                     img_data = requests.get(item["img_url"], timeout=5).content
-                    payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
+                    b64_img = base64.b64encode(img_data).decode('utf-8')
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": b64_img
+                        }
+                    })
                 except: pass
 
-            res = client.models.generate_content(
-                model=MODEL_ID, 
-                contents=payload,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
+            payload = {
+                "contents": [{"parts": parts}],
+                "generationConfig": {"responseMimeType": "application/json"}
+            }
             
-            data = json.loads(res.text)
+            resp = requests.post(api_url, headers={'Content-Type': 'application/json'}, json=payload)
+            resp.raise_for_status() # Force an error if the request fails
+            
+            # Extract the JSON response manually
+            response_json = resp.json()
+            raw_ai_text = response_json['candidates'][0]['content']['parts'][0]['text']
+            
+            data = json.loads(raw_ai_text)
             entry = data[0] if isinstance(data, list) else data
             resale = float(entry.get("resale_price", 0))
             profit = round((resale * (1 - FEE_RATE)) - item['price'], 2)
