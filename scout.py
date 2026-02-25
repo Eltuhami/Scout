@@ -1,17 +1,24 @@
 import os
 import re
 import json
+import random
 import requests
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from bs4 import BeautifulSoup
 
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
 MAX_BUY_PRICE = 16.0    
 MIN_NET_PROFIT = 5.0    
-# Back to 1.5 Flash using the stable SDK to avoid 404s and 429s
-MODEL_ID = "gemini-1.5-flash" 
+MODEL_ID = "gemini-2.0-flash" 
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
+
+# Hardcoded keywords save 50% of your API quota per run
+KEYWORDS = [
+    "Nintendo DS", "Gameboy", "Pokemon Set", "YuGiOh Sammlung", 
+    "Lego Star Wars", "Lego Konvolut", "Vintage Casio", "Polaroid Kamera"
+]
 # ────────────────────────────────────────────────────────────────────────
 
 def load_history():
@@ -24,38 +31,23 @@ def save_history(url):
     with open(HISTORY_FILE, "a") as f:
         f.write(url + "\n")
 
-def get_keyword(model):
-    try:
-        res = model.generate_content(f"Suggest ONE specific collectible (e.g., 'Nintendo DS', 'Lego Set') under {MAX_BUY_PRICE}€. Return ONLY the name.")
-        keyword = res.text.strip().replace('"', '')
-        print(f"[SEARCH] AI selected keyword: {keyword}", flush=True)
-        return keyword
-    except Exception as e:
-        print(f"[ERROR] Keyword fail: {e}", flush=True)
-        # Broad backup keyword to ensure we don't get 0 items
-        return "Lego" 
-
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
-    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}"
+    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}&render=true"
     
-    print(f"[SCRAPER] Contacting eBay for '{keyword}'...", flush=True)
     try:
         resp = requests.get(proxy, timeout=60)
         soup = BeautifulSoup(resp.text, "html.parser")
-        
-        # Broadest possible search for items
-        items = soup.select(".s-item")
-        print(f"[SCRAPER] Found {len(items)} raw HTML elements.", flush=True)
+        items = soup.select(".s-item__info")
         
         listings = []
         for item in items:
             title_el = item.select_one(".s-item__title")
             title = title_el.text.strip() if title_el else ""
             
-            # Skip hidden dummy items
-            if not title or "Shop on eBay" in title:
+            trash = ["seite", "navigation", "feedback", "altersempfehlung", "hülle", "case", "kabel", "adapter"]
+            if not title or any(x in title.lower() for x in trash):
                 continue
 
             link_el = item.select_one(".s-item__link")
@@ -70,11 +62,11 @@ def scrape_ebay(keyword, seen):
             try:
                 price = float(price_str)
                 if 0 < price <= MAX_BUY_PRICE:
-                    listings.append({"title": title, "price": price, "url": item_url})
+                    img_container = item.parent.select_one(".s-item__image-wrapper img")
+                    img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
+                    listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
             except: continue
-            
             if len(listings) >= 3: break
-            
         return listings
     except Exception as e: 
         print(f"[SCRAPE ERROR] {e}", flush=True)
@@ -87,26 +79,35 @@ def run_scout():
         print("[CRITICAL] Missing API Key!", flush=True)
         return
 
-    # Configure the stable SDK
-    genai.configure(api_key=key)
-    model = genai.GenerativeModel(MODEL_ID)
-    
+    client = genai.Client(api_key=key)
     history = load_history()
-    keyword = get_keyword(model)
+    
+    # Select a random keyword from the list without burning API calls
+    keyword = random.choice(KEYWORDS)
+    print(f"[SEARCH] Hunting for: {keyword}", flush=True)
+    
     items = scrape_ebay(keyword, history)
-    print(f"[INFO] Successfully parsed {len(items)} new items.", flush=True)
+    print(f"[INFO] Found {len(items)} items.", flush=True)
 
     for item in items:
-        print(f"[AI] Analyzing: {item['title'][:50]}...", flush=True)
+        print(f"[AI] Analyzing: {item['title'][:40]}...", flush=True)
         try:
             prompt = (
                 f"Estimate resale value for '{item['title']}' at {item['price']}€. "
+                "Check the image for damage. "
                 "Return ONLY valid JSON: [{'resale_price': 30.0, 'reasoning': '...', 'score': 80}]"
             )
-            
-            res = model.generate_content(
-                prompt,
-                generation_config=genai.GenerationConfig(response_mime_type="application/json")
+            payload = [prompt]
+            if item.get("img_url") and item["img_url"].startswith("http"):
+                try:
+                    img_data = requests.get(item["img_url"], timeout=5).content
+                    payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
+                except: pass
+
+            res = client.models.generate_content(
+                model=MODEL_ID, 
+                contents=payload,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
             )
             
             data = json.loads(res.text)
@@ -117,12 +118,11 @@ def run_scout():
             if profit >= MIN_NET_PROFIT:
                 webhook = os.getenv("DISCORD_WEBHOOK")
                 msg = {"content": f"💰 **DEAL FOUND**\n**Item:** {item['title']}\n**Buy:** {item['price']}€\n**Profit:** {profit}€\n**Link:** {item['url']}"}
-                if webhook:
-                    requests.post(webhook, json=msg)
+                requests.post(webhook, json=msg)
                 save_history(item['url'])
                 print(f"[SUCCESS] Profit: {profit}€", flush=True)
             else:
-                print(f"[INFO] Skipped. Profit: {profit}€", flush=True)
+                print(f"[INFO] Skipped. Est. Profit: {profit}€", flush=True)
         except Exception as e:
             print(f"[AI ERROR] {e}", flush=True)
 
