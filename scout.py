@@ -14,7 +14,6 @@ MODEL_ID = "gemini-1.5-flash"
 FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
-# Ultra-cheap keywords that guarantee hundreds of eBay results
 KEYWORDS = [
     "Pokemon Common Karte", "Lego Steine Konvolut", "Manga Band 1", 
     "Yugioh Common", "DVD Konvolut", "Nintendo DS Spiel"
@@ -33,13 +32,17 @@ def save_history(url):
 
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
-    # ADDED: device=desktop to force the reliable desktop HTML layout
-    proxy = f"http://api.scraperapi.com?api_key={scraper_key}&url={url}&device=desktop"
+    # Let requests handle the URL encoding so the "&" symbols don't break ScraperAPI
+    payload = {
+        'api_key': scraper_key,
+        'url': ebay_url,
+        'render': 'true' # Rendering JS sometimes helps bypass bot checks
+    }
     
     try:
-        resp = requests.get(proxy, timeout=60)
+        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
         soup = BeautifulSoup(resp.text, "html.parser")
         
         print(f"[SCRAPER] Page Title: {soup.title.text if soup.title else 'No Title'}", flush=True)
@@ -48,7 +51,9 @@ def scrape_ebay(keyword, seen):
         print(f"[SCRAPER] Found {len(items)} raw eBay elements on the page.", flush=True)
         
         if len(items) <= 2:
-            print("[INFO] eBay returned a '0 Results' page for this keyword. It is too strict.", flush=True)
+            # If it fails, print the first 300 characters of the website text to see if it's a Captcha or Error
+            clean_text = re.sub(r'\s+', ' ', soup.text).strip()
+            print(f"[DEBUG] eBay Page Dump: {clean_text[:300]}...", flush=True)
             return []
             
         listings = []
