@@ -4,8 +4,7 @@ import json
 import random
 import requests
 import urllib.parse
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from bs4 import BeautifulSoup
 
 # ─── CORE CONFIG ────────────────────────────────────────────────────────
@@ -57,8 +56,6 @@ def scrape_ebay(keyword, seen):
             
         listings = []
         processed_urls = set()
-        skipped_expensive = 0
-        debug_printed = False
         
         for link_el in item_links:
             try:
@@ -68,7 +65,6 @@ def scrape_ebay(keyword, seen):
                     continue
                 processed_urls.add(item_url)
                 
-                # Climb higher (up to 10 levels) to find the master container
                 container = link_el
                 for _ in range(10):
                     if container.parent and not re.search(r"\d+,\d{2}", container.text):
@@ -89,24 +85,13 @@ def scrape_ebay(keyword, seen):
                 if any(x in title.lower() for x in trash):
                     continue
 
-                # Aggressive Price Search: Just find the first German decimal number
                 match = re.search(r"(\d+[\.,]\d{2})", raw_text)
-                
-                if not match:
-                    # X-RAY LOGGING: If we STILL can't find a price, print the raw text of the first failure
-                    if not debug_printed:
-                        clean_dump = re.sub(r'\s+', ' ', raw_text).strip()
-                        print(f"[DEBUG] X-Ray of failed item: {clean_dump[:200]}...", flush=True)
-                        debug_printed = True
-                    continue
+                if not match: continue
                     
                 price_str = match.group(1).replace('.', '').replace(',', '.')
                 price = float(price_str)
                 
-                if price > MAX_BUY_PRICE:
-                    skipped_expensive += 1
-                    continue 
-                if price <= 0:
+                if price > MAX_BUY_PRICE or price <= 0:
                     continue 
 
                 img_url = ""
@@ -121,9 +106,6 @@ def scrape_ebay(keyword, seen):
                     break
             except:
                 continue
-                
-        if not listings:
-            print(f"[INFO] Searched {len(item_links)} links. {skipped_expensive} were over {MAX_BUY_PRICE}€. The rest lacked clear titles/prices.", flush=True)
             
         return listings
     except Exception as e: 
@@ -137,7 +119,9 @@ def run_scout():
         print("[CRITICAL] Missing API Key!", flush=True)
         return
 
-    client = genai.Client(api_key=key)
+    # Using the stable SDK configuration
+    genai.configure(api_key=key)
+    model = genai.GenerativeModel(MODEL_ID)
     history = load_history()
     
     keyword = random.choice(KEYWORDS)
@@ -158,13 +142,12 @@ def run_scout():
             if item.get("img_url") and item["img_url"].startswith("http"):
                 try:
                     img_data = requests.get(item["img_url"], timeout=5).content
-                    payload.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
+                    payload.append({"mime_type": "image/jpeg", "data": img_data})
                 except: pass
 
-            res = client.models.generate_content(
-                model=MODEL_ID, 
-                contents=payload,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+            res = model.generate_content(
+                payload,
+                generation_config=genai.GenerationConfig(response_mime_type="application/json")
             )
             
             data = json.loads(res.text)
