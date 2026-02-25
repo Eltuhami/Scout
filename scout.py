@@ -53,13 +53,12 @@ def scrape_ebay(keyword, seen):
         print(f"[SCRAPER] Found {len(item_links)} product links using /itm/ method.", flush=True)
         
         if not item_links:
-            clean_text = re.sub(r'\s+', ' ', soup.text).strip()
-            print(f"[DEBUG] eBay Page Dump: {clean_text[:500]}...", flush=True)
             return []
             
         listings = []
         processed_urls = set()
         skipped_expensive = 0
+        debug_printed = False
         
         for link_el in item_links:
             try:
@@ -69,21 +68,18 @@ def scrape_ebay(keyword, seen):
                     continue
                 processed_urls.add(item_url)
                 
-                # Smart Container Expansion: Climb the HTML tree to find the price box
+                # Climb higher (up to 10 levels) to find the master container
                 container = link_el
-                for _ in range(5):
-                    if container.parent and not re.search(r"(EUR|€)", container.text):
+                for _ in range(10):
+                    if container.parent and not re.search(r"\d+,\d{2}", container.text):
                         container = container.parent
                         
                 raw_text = container.text.replace('\xa0', ' ')
                 
-                # Extract Title
                 title = link_el.text.strip()
                 if not title:
                     img = container.find("img")
                     title = img.get("alt", "") if img else ""
-                    
-                # Clean up title just in case it grabbed the whole box text
                 title = title.split('\n')[0].strip()
                     
                 if not title or "Shop on eBay" in title or "Neues Angebot" in title:
@@ -93,12 +89,16 @@ def scrape_ebay(keyword, seen):
                 if any(x in title.lower() for x in trash):
                     continue
 
-                # Robust Price Search
-                match = re.search(r"(?:EUR|€)\s*(\d+[\.,]\d{2}|\d+)", raw_text)
-                if not match:
-                    match = re.search(r"(\d+[\.,]\d{2}|\d+)\s*(?:EUR|€)", raw_text)
+                # Aggressive Price Search: Just find the first German decimal number
+                match = re.search(r"(\d+[\.,]\d{2})", raw_text)
                 
-                if not match: continue
+                if not match:
+                    # X-RAY LOGGING: If we STILL can't find a price, print the raw text of the first failure
+                    if not debug_printed:
+                        clean_dump = re.sub(r'\s+', ' ', raw_text).strip()
+                        print(f"[DEBUG] X-Ray of failed item: {clean_dump[:200]}...", flush=True)
+                        debug_printed = True
+                    continue
                     
                 price_str = match.group(1).replace('.', '').replace(',', '.')
                 price = float(price_str)
@@ -109,7 +109,6 @@ def scrape_ebay(keyword, seen):
                 if price <= 0:
                     continue 
 
-                # Extract image
                 img_url = ""
                 img_el = container.find("img")
                 if img_el:
