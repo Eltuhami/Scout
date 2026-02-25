@@ -141,7 +141,6 @@ def run_scout():
             
             content_list = [{"type": "text", "text": prompt}]
             
-            # The Fix: We download the image ourselves and encode it to Base64
             if item.get("img_url") and item["img_url"].startswith("http"):
                 try:
                     img_resp = requests.get(item["img_url"], timeout=5)
@@ -154,15 +153,14 @@ def run_scout():
                     print(f"  [!] Could not download image: {e}", flush=True)
                 
             payload = {
-                "model": "llama-3.2-90b-vision-preview",
+                "model": "llama-3.2-90b-vision-instruct", # Updated to the current, supported model
                 "messages": [{"role": "user", "content": content_list}],
                 "temperature": 0.2,
-                "max_tokens": 1024 # Required by some Groq vision models
+                "max_tokens": 1024 
             }
             
             resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
             
-            # If Groq throws an error, print the EXACT reason why
             if not resp.ok:
                 print(f"[AI ERROR] Groq rejected the request. Reason: {resp.text}", flush=True)
                 continue
