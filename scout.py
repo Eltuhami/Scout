@@ -33,26 +33,32 @@ def save_history(url):
 
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    
-    # 1. URL Encode the keyword safely
     safe_keyword = urllib.parse.quote(keyword)
     
-    # 2. REMOVED _udhi=16 (Price Limit) from the URL. 
-    # This forces eBay to give us results. We will filter prices in Python.
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1"
+    # Put the 16€ budget limit back into the URL so eBay filters the trash for us
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
+    # CRITICAL: ScraperAPI parameters to force eBay to load the product grid
     payload = {
         'api_key': scraper_key,
-        'url': ebay_url
+        'url': ebay_url,
+        'render': 'true',           # Wait for JavaScript to load the items
+        'device_type': 'desktop',   # Force standard Desktop HTML layout
+        'country_code': 'de'        # Connect using a German IP
     }
     
     try:
-        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
+        # Increased timeout to 90s because rendering JS takes a little longer
+        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=90)
         soup = BeautifulSoup(resp.text, "html.parser")
         
         print(f"[SCRAPER] Page Title: {soup.title.text if soup.title else 'No Title'}", flush=True)
         
-        items = soup.find_all(class_=re.compile(r"s-item"))
+        # Target the info box specifically to avoid hidden background tags
+        items = soup.find_all("div", class_=re.compile(r"s-item__info"))
+        if not items:
+            items = soup.find_all("li", class_=re.compile(r"s-item"))
+            
         print(f"[SCRAPER] Found {len(items)} raw eBay elements on the page.", flush=True)
         
         if len(items) <= 2:
@@ -62,7 +68,7 @@ def scrape_ebay(keyword, seen):
             
         listings = []
         for item in items:
-            title_el = item.select_one(".s-item__title")
+            title_el = item.select_one(".s-item__title") or item.find("h3")
             title = title_el.text.strip() if title_el else ""
             
             if not title or "Shop on eBay" in title or "Neues Angebot" in title:
@@ -81,17 +87,23 @@ def scrape_ebay(keyword, seen):
             price_str = match.group(1).replace('.', '').replace(',', '.')
             try:
                 price = float(price_str)
-                # 3. PYTHON PRICE FILTER: We ignore expensive items here instead of breaking eBay
                 if price > MAX_BUY_PRICE or price <= 0:
                     continue 
             except: continue
 
+            # Find the link dynamically depending on which element the scraper grabbed
             link_el = item.select_one(".s-item__link")
+            if not link_el and item.parent:
+                link_el = item.parent.select_one(".s-item__link")
             if not link_el: continue
+                
             item_url = link_el["href"].split("?")[0]
             if item_url in seen: continue
 
             img_container = item.select_one(".s-item__image-wrapper img")
+            if not img_container and item.parent:
+                img_container = item.parent.select_one(".s-item__image-wrapper img")
+                
             img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
             
             print(f"  [+] Cheap Item Found: {title[:40]}... ({price}€)", flush=True)
