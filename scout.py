@@ -7,11 +7,11 @@ import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 
-# ─── CORE CONFIG (TESTING MODE) ─────────────────────────────────────────
-MAX_BUY_PRICE = 40.0       # Higher budget to find wider profit margins
-MIN_NET_PROFIT = 10.0      # Increased reward for the higher spend
-CONFIDENCE_THRESHOLD = 90  
-FEE_RATE = 0.15            # Set to 0.00 if you sell as a private person
+# ─── CONFIGURATION (40€ BUDGET MODE) ────────────────────────────────────
+MAX_BUY_PRICE = 40.0       
+MIN_NET_PROFIT = 10.0      # Your "Zero Gambling" shield
+CONFIDENCE_THRESHOLD = 80  # Lowered slightly to capture more Pro deals
+FEE_RATE = 0.15            # CHANGE TO 0.00 IF YOU ARE A PRIVATE SELLER
 HISTORY_FILE = "history.txt"
 # ────────────────────────────────────────────────────────────────────────
 
@@ -22,49 +22,38 @@ def load_history():
     return set()
 
 def save_history(url):
+    """Saves URL immediately to prevent re-auditing bad deals"""
     with open(HISTORY_FILE, "a") as f:
         f.write(url + "\n")
 
 def get_dynamic_keyword(groq_key):
+    """Forces variety in high-value niches"""
     try:
-        # Focusing on niches where 40€ buys high-value bundles
-        niches = ["Elektronik Konvolut", "Profi Werkzeug", "Spielepaket", "Kamera Zubehör", "Modellbau"]
+        niches = ["Profi Werkzeug", "Elektronik Konvolut", "Retro Kamera", "Gaming Bundle", "Musikinstrumente"]
         selected = random.choice(niches)
         headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        prompt = (
-            f"Think of ONE specific German search term for used {selected} on eBay. "
-            "Avoid 'Sammlerstücke'. Return ONLY the word (e.g., 'Akkuschrauber', 'Spiegelreflex')."
-        )
+        prompt = f"Return ONLY ONE specific German eBay search term for {selected}. No intro text. e.g. 'Akkuschrauber'"
         payload = {
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-            "temperature": 1.0,
-            "max_tokens": 20
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8
         }
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
         return resp.json()['choices'][0]['message']['content'].strip('."\' \n')
     except: return "Konvolut"
 
 def scrape_ebay_details(item_url):
+    """Uses JS Rendering to bypass 2026 eBay content blocks"""
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    # Adding render=true to handle 2026 dynamic eBay content
-    payload = {
-        'api_key': scraper_key, 
-        'url': item_url, 
-        'country_code': 'de',
-        'render': 'true' 
-    }
+    # RENDER=TRUE ensures the AI sees the text behind the 'Read More' buttons
+    payload = {'api_key': scraper_key, 'url': item_url, 'country_code': 'de', 'render': 'true'}
     try:
         resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
-        if resp.status_code != 200:
-            return f"Error: ScraperAPI returned status {resp.status_code}"
-            
         soup = BeautifulSoup(resp.text, "html.parser")
-        # Updated selectors for 2026 eBay layout
-        desc_div = soup.select_one("#ds_div, .d-item-description, .x-item-description-child")
-        return desc_div.text.strip()[:2500] if desc_div else "Description not found on page."
-    except Exception as e: 
-        return f"Scraper Error: {str(e)}"
+        # Target the 2026 iFrame and description selectors
+        desc_div = soup.select_one("#ds_div, .d-item-description, .x-item-description-child, [class*='description']")
+        return desc_div.text.strip()[:2500] if desc_div else "Incomplete description."
+    except: return "Scraper error."
 
 def scrape_ebay_search(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
@@ -96,7 +85,7 @@ def scrape_ebay_search(keyword, seen):
     except: return []
 
 def run_scout():
-    print("--- [START] High-Limit Audit ---", flush=True)
+    print("--- [START] Robust Sniper Audit ---", flush=True)
     groq_key = os.getenv("GROQ_API_KEY")
     if not groq_key: return
     history = load_history()
@@ -107,26 +96,32 @@ def run_scout():
     for item in items:
         try:
             description = scrape_ebay_details(item['url'])
-            save_history(item['url']) # Blacklist immediately
+            save_history(item['url']) # Blacklist immediately to save tokens later
 
             prompt = (
-                f"STRICT AUDIT - HIGH BUDGET MODE.\n"
+                f"STRICT AUDIT - HIGH BUDGET.\n"
                 f"Item: {item['title']}\n"
                 f"Description: {description}\n"
                 f"Cost: {item['price']}€\n\n"
-                f"Analyze if reselling this for profit is viable. MIN PROFIT: {MIN_NET_PROFIT}€.\n"
                 "Return JSON ONLY: {\"resale_price\": 0.0, \"confidence\": 0, \"reasoning\": \"...\"}"
             )
             
             headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
             content_list = [{"type": "text", "text": prompt}]
             if item.get("img_url").startswith("http"):
-                img_b64 = base64.b64encode(requests.get(item["img_url"]).content).decode('utf-8')
-                content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})
+                try:
+                    img_b64 = base64.b64encode(requests.get(item["img_url"]).content).decode('utf-8')
+                    content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})
+                except: pass
                 
             payload = {"model": "meta-llama/llama-4-scout-17b-16e-instruct", "messages": [{"role": "user", "content": content_list}], "temperature": 0.1}
             resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
-            data = json.loads(resp.json()['choices'][0]['message']['content'].strip().removeprefix("```json").removesuffix("```").strip())
+            
+            # ROBUST JSON REPAIR
+            raw_content = resp.json()['choices'][0]['message']['content']
+            json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
+            if not json_match: raise ValueError("No JSON found")
+            data = json.loads(json_match.group())
             
             resale = float(data.get("resale_price", 0))
             conf = int(data.get("confidence", 0))
@@ -134,12 +129,14 @@ def run_scout():
             
             if profit >= MIN_NET_PROFIT and conf >= CONFIDENCE_THRESHOLD:
                 webhook = os.getenv("DISCORD_WEBHOOK")
-                msg = {"content": f"🚀 **HIGH-VALUE DEAL**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Profit:** {profit}€\n**Link:** {item['url']}"}
+                msg = {"content": f"🎯 **CERTIFIED WIN**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Logic:** {data.get('reasoning')}\n**Link:** {item['url']}"}
                 if webhook: requests.post(webhook, json=msg)
                 print(f"[WIN] {item['title']} - Profit: {profit}€", flush=True)
             else:
                 print(f"[REJECT] Conf: {conf}% | Profit: {profit}€", flush=True)
-        except: continue
+        except Exception as e:
+            print(f"[ERROR] Skipping item: {str(e)}", flush=True)
+            continue
     print("--- [FINISH] ---", flush=True)
 
 if __name__ == "__main__":
