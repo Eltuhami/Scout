@@ -3,6 +3,7 @@ import re
 import json
 import random
 import requests
+import urllib.parse
 from google import genai
 from google.genai import types
 from bs4 import BeautifulSoup
@@ -15,8 +16,8 @@ FEE_RATE = 0.15
 HISTORY_FILE = "history.txt"
 
 KEYWORDS = [
-    "Pokemon Common Karte", "Lego Steine Konvolut", "Manga Band 1", 
-    "Yugioh Common", "DVD Konvolut", "Nintendo DS Spiel"
+    "Pokemon Karte", "Lego Steine Konvolut", "Manga Band 1", 
+    "Yugioh Karte", "Nintendo DS Spiel", "Gameboy Spiel"
 ]
 # ────────────────────────────────────────────────────────────────────────
 
@@ -32,13 +33,17 @@ def save_history(url):
 
 def scrape_ebay(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}"
     
-    # Let requests handle the URL encoding so the "&" symbols don't break ScraperAPI
+    # 1. URL Encode the keyword safely
+    safe_keyword = urllib.parse.quote(keyword)
+    
+    # 2. REMOVED _udhi=16 (Price Limit) from the URL. 
+    # This forces eBay to give us results. We will filter prices in Python.
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1"
+    
     payload = {
         'api_key': scraper_key,
-        'url': ebay_url,
-        'render': 'true' # Rendering JS sometimes helps bypass bot checks
+        'url': ebay_url
     }
     
     try:
@@ -51,7 +56,6 @@ def scrape_ebay(keyword, seen):
         print(f"[SCRAPER] Found {len(items)} raw eBay elements on the page.", flush=True)
         
         if len(items) <= 2:
-            # If it fails, print the first 300 characters of the website text to see if it's a Captcha or Error
             clean_text = re.sub(r'\s+', ' ', soup.text).strip()
             print(f"[DEBUG] eBay Page Dump: {clean_text[:300]}...", flush=True)
             return []
@@ -77,6 +81,7 @@ def scrape_ebay(keyword, seen):
             price_str = match.group(1).replace('.', '').replace(',', '.')
             try:
                 price = float(price_str)
+                # 3. PYTHON PRICE FILTER: We ignore expensive items here instead of breaking eBay
                 if price > MAX_BUY_PRICE or price <= 0:
                     continue 
             except: continue
@@ -89,7 +94,7 @@ def scrape_ebay(keyword, seen):
             img_container = item.select_one(".s-item__image-wrapper img")
             img_url = img_container.get("src") or img_container.get("data-src") or "" if img_container else ""
             
-            print(f"  [+] Valid Item Found: {title[:40]}... ({price}€)", flush=True)
+            print(f"  [+] Cheap Item Found: {title[:40]}... ({price}€)", flush=True)
             listings.append({"title": title, "price": price, "url": item_url, "img_url": img_url})
             
             if len(listings) >= 3: 
