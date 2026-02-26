@@ -7,9 +7,9 @@ import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 
-# ─── CONFIGURATION (40€ BUDGET MODE) ────────────────────────────────────
-MAX_BUY_PRICE = 1000.0       
-MIN_NET_PROFIT = 50.0      # Your "Zero Gambling" shield
+# ─── CONFIGURATION ────────────────────────────────────
+MAX_BUY_PRICE = 16.0       
+MIN_NET_PROFIT = 5.0      # Your "Zero Gambling" shield
 CONFIDENCE_THRESHOLD = 80  # Lowered slightly to capture more Pro deals
 FEE_RATE = 0.15            # CHANGE TO 0.00 IF YOU ARE A PRIVATE SELLER
 HISTORY_FILE = "history.txt"
