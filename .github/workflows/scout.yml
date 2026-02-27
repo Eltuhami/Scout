@@ -1,5 +1,9 @@
 name: Scout Auto-Run
 
+concurrency: 
+  group: scout-bot-queue
+  cancel-in-progress: false
+
 on:
   schedule:
     # Erzwingt den maximal möglichen Takt (ca. alle 5-7 Minuten in der Realität)
