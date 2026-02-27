@@ -27,20 +27,26 @@ def save_history(url):
         f.write(url + "\n")
 
 def get_dynamic_keyword(groq_key):
-    """Forces variety in high-value niches"""
     try:
-        niches = ["Profi Werkzeug", "Elektronik Konvolut", "Retro Kamera", "Gaming Bundle", "Musikinstrumente"]
-        selected = random.choice(niches)
+        # 1. PYTHON ERZWINGT DEN ZUFALL
+        marken = ["Makita", "Bosch", "Nintendo", "Sony", "Lego", "DJI", "Apple", "Festool"]
+        zustaende = ["Defekt", "Konvolut", "Bastler", "Set", "ungeprüft", "Sammlung"]
+        
+        zufalls_seed = f"{random.choice(marken)} {random.choice(zustaende)}"
+        
+        # 2. KI MACHT DARAUS EIN REALISTISCHES SUCHWORT
         headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        prompt = f"Return ONLY ONE specific German eBay search term for {selected}. No intro text. e.g. 'Akkuschrauber'"
+        prompt = f"Erstelle genau EINEN realistischen eBay-Suchbegriff für '{zufalls_seed}'. Nur das Keyword, keine Einleitung! (z.B. 'Makita 18V Schrauber defekt Bastler')"
+        
         payload = {
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.8
+            "temperature": 0.9 # Hohe Kreativität, da der Seed schon streng vorgegeben ist
         }
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
         return resp.json()['choices'][0]['message']['content'].strip('."\' \n')
-    except: return "Konvolut"
+    except: 
+        return "Konvolut"
 
 def scrape_ebay_details(item_url):
     """Uses JS Rendering to bypass 2026 eBay content blocks"""
