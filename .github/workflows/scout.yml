@@ -2,7 +2,6 @@ name: Scout Auto-Run
 
 on:
   schedule:
-    # Startet alle 15 Minuten (4x pro Stunde) für maximale Chancen
     - cron: '* * * * *'
   workflow_dispatch: 
 
