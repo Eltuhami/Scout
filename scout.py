@@ -100,13 +100,16 @@ def run_scout():
             description = scrape_ebay_details(item['url'])
             save_history(item['url'])
 
-            prompt = (
-                f"STRICT AUDIT - 16 EURO BUNDLE BUDGET.\n"
-                f"Item: {item['title']}\n"
-                f"Description: {description}\n"
-                f"Cost: {item['price']}€\n\n"
-                "Return JSON ONLY: {\"resale_price\": 0.0, \"confidence\": 0, \"reasoning\": \"...\"}"
-            )
+prompt = (
+    f"RETAIL MARKET AUDIT - {MAX_BUY_PRICE} EURO MAX BUDGET.\n"
+    f"Item: {item['title']}\n"
+    f"Description: {description}\n"
+    f"Cost: {item['price']}€\n\n"
+    "RULE 1: Estimate the HIGHEST realistic retail price a buyer would initially see before negotiating.\n"
+    "RULE 2: If the item is clearly defective, estimate the fair market value for hobbyists.\n"
+    "RULE 3: If you cannot identify the exact brand or model, 'confidence' MUST be strictly 0.\n"
+    "Return JSON ONLY: {\"resale_price\": 0.0, \"confidence\": 0, \"reasoning\": \"Retail market evaluation...\"}"
+)
             
             headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
             content_list = [{"type": "text", "text": prompt}]
