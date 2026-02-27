@@ -2,6 +2,7 @@ name: Scout Auto-Run
 
 on:
   schedule:
+    # Erzwingt den maximal möglichen Takt (ca. alle 5-7 Minuten in der Realität)
     - cron: '* * * * *'
   workflow_dispatch: 
 
@@ -38,8 +39,11 @@ jobs:
           git config --global user.email "bot@scout.local"
           git add history.txt
           
-          # Zieht sich die neueste Version, bevor er speichert (verhindert den Push-Error)
+          # 1. ERST LOKAL SPEICHERN
+          git commit -m "Auto-update history.txt [skip ci]" || echo "Nothing to commit"
+          
+          # 2. DANN REBASE (Läuft jetzt fehlerfrei durch)
           git pull --rebase origin main  
           
-          git commit -m "Auto-update history.txt [skip ci]" || echo "Nothing to commit"
+          # 3. DANN PUSHEN
           git push origin main
