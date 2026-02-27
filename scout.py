@@ -7,11 +7,11 @@ import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 
-# ─── CONFIGURATION ────────────────────────────────────
+# ─── 16€ BUDGET "VOLUME" MODE ───────────────────────────────────────────
 MAX_BUY_PRICE = 16.0       
-MIN_NET_PROFIT = 5.0      # Your "Zero Gambling" shield
-CONFIDENCE_THRESHOLD = 80  # Lowered slightly to capture more Pro deals
-FEE_RATE = 0.15            # CHANGE TO 0.00 IF YOU ARE A PRIVATE SELLER
+MIN_NET_PROFIT = 4.5       
+CONFIDENCE_THRESHOLD = 85  
+FEE_RATE = 0.15            # Auf 0.00 setzen, falls du privater Verkäufer bist
 HISTORY_FILE = "history.txt"
 # ────────────────────────────────────────────────────────────────────────
 
@@ -22,41 +22,37 @@ def load_history():
     return set()
 
 def save_history(url):
-    """Saves URL immediately to prevent re-auditing bad deals"""
     with open(HISTORY_FILE, "a") as f:
         f.write(url + "\n")
 
 def get_dynamic_keyword(groq_key):
+    """Hybrid-Modell: Python-Zufall gepaart mit KI-Kreativität"""
     try:
-        # 1. PYTHON ERZWINGT DEN ZUFALL
-        marken = ["Makita", "Bosch", "Nintendo", "Sony", "Lego", "DJI", "Apple", "Festool"]
-        zustaende = ["Defekt", "Konvolut", "Bastler", "Set", "ungeprüft", "Sammlung"]
+        marken = ["Makita", "Bosch", "Nintendo", "Sony", "Lego", "DJI", "Apple", "Festool", "Knipex", "Wera"]
+        zustaende = ["Defekt", "Konvolut", "Bastler", "Set", "ungeprüft", "Sammlung", "Ersatzteile"]
         
         zufalls_seed = f"{random.choice(marken)} {random.choice(zustaende)}"
         
-        # 2. KI MACHT DARAUS EIN REALISTISCHES SUCHWORT
         headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
         prompt = f"Erstelle genau EINEN realistischen eBay-Suchbegriff für '{zufalls_seed}'. Nur das Keyword, keine Einleitung! (z.B. 'Makita 18V Schrauber defekt Bastler')"
         
         payload = {
             "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.9 # Hohe Kreativität, da der Seed schon streng vorgegeben ist
+            "temperature": 0.9 
         }
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
         return resp.json()['choices'][0]['message']['content'].strip('."\' \n')
     except: 
-        return "Konvolut"
+        return "Technik Konvolut Bastler"
 
 def scrape_ebay_details(item_url):
-    """Uses JS Rendering to bypass 2026 eBay content blocks"""
+    """Holt die Beschreibung mit JavaScript-Rendering"""
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    # RENDER=TRUE ensures the AI sees the text behind the 'Read More' buttons
     payload = {'api_key': scraper_key, 'url': item_url, 'country_code': 'de', 'render': 'true'}
     try:
         resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
         soup = BeautifulSoup(resp.text, "html.parser")
-        # Target the 2026 iFrame and description selectors
         desc_div = soup.select_one("#ds_div, .d-item-description, .x-item-description-child, [class*='description']")
         return desc_div.text.strip()[:2500] if desc_div else "Incomplete description."
     except: return "Scraper error."
@@ -64,7 +60,7 @@ def scrape_ebay_details(item_url):
 def scrape_ebay_search(keyword, seen):
     scraper_key = os.getenv("SCRAPER_API_KEY", "")
     safe_keyword = urllib.parse.quote(keyword)
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000"
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000"
     payload = {'api_key': scraper_key, 'url': ebay_url, 'country_code': 'de'}
     try:
         resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
@@ -91,7 +87,7 @@ def scrape_ebay_search(keyword, seen):
     except: return []
 
 def run_scout():
-    print("--- [START] Robust Sniper Audit ---", flush=True)
+    print("--- [START] 16€ Hybrid Scout ---", flush=True)
     groq_key = os.getenv("GROQ_API_KEY")
     if not groq_key: return
     history = load_history()
@@ -102,10 +98,10 @@ def run_scout():
     for item in items:
         try:
             description = scrape_ebay_details(item['url'])
-            save_history(item['url']) # Blacklist immediately to save tokens later
+            save_history(item['url'])
 
             prompt = (
-                f"STRICT AUDIT - HIGH BUDGET.\n"
+                f"STRICT AUDIT - 16 EURO BUNDLE BUDGET.\n"
                 f"Item: {item['title']}\n"
                 f"Description: {description}\n"
                 f"Cost: {item['price']}€\n\n"
@@ -123,7 +119,7 @@ def run_scout():
             payload = {"model": "meta-llama/llama-4-scout-17b-16e-instruct", "messages": [{"role": "user", "content": content_list}], "temperature": 0.1}
             resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
             
-            # ROBUST JSON REPAIR
+            # Robustes JSON Parsing
             raw_content = resp.json()['choices'][0]['message']['content']
             json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
             if not json_match: raise ValueError("No JSON found")
@@ -133,13 +129,18 @@ def run_scout():
             conf = int(data.get("confidence", 0))
             profit = round((resale * (1 - FEE_RATE)) - item['price'], 2)
             
+            # Sauberes Logging
             if profit >= MIN_NET_PROFIT and conf >= CONFIDENCE_THRESHOLD:
                 webhook = os.getenv("DISCORD_WEBHOOK")
-                msg = {"content": f"🎯 **CERTIFIED WIN**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Logic:** {data.get('reasoning')}\n**Link:** {item['url']}"}
+                msg = {"content": f"🎯 **CERTIFIED WIN**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Profit:** {profit}€\n**Logic:** {data.get('reasoning')}\n**Link:** {item['url']}"}
                 if webhook: requests.post(webhook, json=msg)
-                print(f"[WIN] {item['title']} - Profit: {profit}€", flush=True)
+                print(f"[WIN] {item['title']} - Profit: {profit}€ | Conf: {conf}%", flush=True)
             else:
-                print(f"[REJECT] Conf: {conf}% | Profit: {profit}€", flush=True)
+                if profit > 0:
+                    print(f"[REJECT] Conf: {conf}% | Profit: {profit}€", flush=True)
+                else:
+                    print(f"[REJECT] Kein Profit ({profit}€) - Item wird ignoriert", flush=True)
+                    
         except Exception as e:
             print(f"[ERROR] Skipping item: {str(e)}", flush=True)
             continue
