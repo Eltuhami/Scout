@@ -8,7 +8,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 # ─── 16€ BUDGET "VOLUME" MODE ───────────────────────────────────────────
-MAX_BUY_PRICE = 16.0       
+MAX_BUY_PRICE = 23.0       
 MIN_NET_PROFIT = 4.5       
 CONFIDENCE_THRESHOLD = 85  
 FEE_RATE = 0.15            # Auf 0.00 setzen, falls du privater Verkäufer bist
