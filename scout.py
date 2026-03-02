@@ -7,11 +7,11 @@ import requests
 import urllib.parse
 from bs4 import BeautifulSoup
 
-# ─── 16€ BUDGET "VOLUME" MODE ───────────────────────────────────────────
+# ─── 16€ BUDGET "REALISTIC VOLUME" MODE ─────────────────────────────────
 MAX_BUY_PRICE = 23.0       
 MIN_NET_PROFIT = 2.0       
 CONFIDENCE_THRESHOLD = 85  
-FEE_RATE = 0.15            # Auf 0.00 setzen, falls du privater Verkäufer bist
+FEE_RATE = 0.15            
 HISTORY_FILE = "history.txt"
 # ────────────────────────────────────────────────────────────────────────
 
@@ -46,7 +46,6 @@ def get_dynamic_keyword(groq_key):
         return "Technik Konvolut Bastler"
 
 def scrape_ebay_details(item_url):
-    """Greift auf die Seite zu OHNE teure Proxys (GitHub Actions IPs schützen vor Banns)"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
         resp = requests.get(item_url, headers=headers, timeout=30)
@@ -56,7 +55,6 @@ def scrape_ebay_details(item_url):
     except: return "Scraper error."
 
 def scrape_ebay_search(keyword, seen):
-    """Kostenlose und unlimitierte Suche über Standard-Requests"""
     safe_keyword = urllib.parse.quote(keyword)
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -65,6 +63,10 @@ def scrape_ebay_search(keyword, seen):
         resp = requests.get(ebay_url, headers=headers, timeout=30)
         soup = BeautifulSoup(resp.text, "html.parser")
         item_links = soup.find_all("a", href=re.compile(r"/itm/"))
+        
+        # --- DEBUG LOG ---
+        print(f"[DEBUG] eBay hat {len(item_links)} rohe Links für '{keyword}' geliefert.", flush=True)
+        
         listings = []
         processed_urls = set()
         for link_el in item_links:
@@ -88,7 +90,9 @@ def scrape_ebay_search(keyword, seen):
             listings.append({"title": link_el.text.strip()[:80], "price": price, "url": item_url, "img_url": img_url})
             if len(listings) >= 3: break
         return listings
-    except: return []
+    except Exception as e:
+        print(f"[DEBUG] Fehler beim Scrapen: {e}", flush=True)
+        return []
 
 def run_scout():
     print("--- [START] 16€ Hybrid Scout ---", flush=True)
@@ -102,6 +106,11 @@ def run_scout():
     print(f"[SEARCH] Target: {keyword}", flush=True)
     
     items = scrape_ebay_search(keyword, history)
+    
+    # --- ZUSÄTZLICHES INFO-LOG ---
+    if not items:
+        print("[INFO] Keine passenden Items unter 23€ gefunden oder von eBay blockiert.", flush=True)
+
     for item in items:
         try:
             description = scrape_ebay_details(item['url'])
@@ -150,7 +159,6 @@ def run_scout():
                 else:
                     print(f"[REJECT] Kein Profit ({profit}€) - Item wird ignoriert", flush=True)
             
-            # WICHTIG: History erst speichern, wenn die Bewertung FEHLERFREI durchlief
             save_history(item['url'])
                     
         except Exception as e:
