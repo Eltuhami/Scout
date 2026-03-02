@@ -79,11 +79,13 @@ def scrape_ebay_search(keyword, seen):
             if not match: continue
             price = float(match.group(1).replace('.', '').replace(',', '.'))
             if price > MAX_BUY_PRICE: continue
-           img_el = container.find("img")
+            
+            img_el = container.find("img")
             img_url = img_el.get("src") or img_el.get("data-src") or ""
             
-            # Verwandelt winzige Thumbnails (s-l140 oder s-l225) in scharfe HD-Bilder (s-l1600)
-            img_url = re.sub(r's-l\d+\.', 's-l1600.', img_url)
+            # HD-BILD FIX: Verwandelt winzige Thumbnails (s-l140) in scharfe HD-Bilder (s-l1600)
+            if img_url:
+                img_url = re.sub(r's-l\d+\.', 's-l1600.', img_url)
             
             listings.append({"title": link_el.text.strip()[:80], "price": price, "url": item_url, "img_url": img_url})
             if len(listings) >= 3: break
