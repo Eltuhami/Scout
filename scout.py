@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 
 # ─── 16€ BUDGET "VOLUME" MODE ───────────────────────────────────────────
 MAX_BUY_PRICE = 23.0       
-MIN_NET_PROFIT = 4.5       
+MIN_NET_PROFIT = 2.0       
 CONFIDENCE_THRESHOLD = 85  
 FEE_RATE = 0.15            # Auf 0.00 setzen, falls du privater Verkäufer bist
 HISTORY_FILE = "history.txt"
@@ -26,7 +26,6 @@ def save_history(url):
         f.write(url + "\n")
 
 def get_dynamic_keyword(groq_key):
-    """Hybrid-Modell: Python-Zufall gepaart mit KI-Kreativität"""
     try:
         marken = ["Makita", "Bosch", "Nintendo", "Sony", "Lego", "DJI", "Apple", "Festool", "Knipex", "Wera"]
         zustaende = ["Defekt", "Konvolut", "Bastler", "Set", "ungeprüft", "Sammlung", "Ersatzteile"]
@@ -47,23 +46,23 @@ def get_dynamic_keyword(groq_key):
         return "Technik Konvolut Bastler"
 
 def scrape_ebay_details(item_url):
-    """Holt die Beschreibung mit JavaScript-Rendering"""
-    scraper_key = os.getenv("SCRAPER_API_KEY", "")
-    payload = {'api_key': scraper_key, 'url': item_url, 'country_code': 'de', 'render': 'true'}
+    """Greift auf die Seite zu OHNE teure Proxys (GitHub Actions IPs schützen vor Banns)"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
-        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
+        resp = requests.get(item_url, headers=headers, timeout=30)
         soup = BeautifulSoup(resp.text, "html.parser")
         desc_div = soup.select_one("#ds_div, .d-item-description, .x-item-description-child, [class*='description']")
         return desc_div.text.strip()[:2500] if desc_div else "Incomplete description."
     except: return "Scraper error."
 
 def scrape_ebay_search(keyword, seen):
-    scraper_key = os.getenv("SCRAPER_API_KEY", "")
+    """Kostenlose und unlimitierte Suche über Standard-Requests"""
     safe_keyword = urllib.parse.quote(keyword)
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000"
-    payload = {'api_key': scraper_key, 'url': ebay_url, 'country_code': 'de'}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    
     try:
-        resp = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
+        resp = requests.get(ebay_url, headers=headers, timeout=30)
         soup = BeautifulSoup(resp.text, "html.parser")
         item_links = soup.find_all("a", href=re.compile(r"/itm/"))
         listings = []
@@ -83,7 +82,6 @@ def scrape_ebay_search(keyword, seen):
             img_el = container.find("img")
             img_url = img_el.get("src") or img_el.get("data-src") or ""
             
-            # HD-BILD FIX: Verwandelt winzige Thumbnails (s-l140) in scharfe HD-Bilder (s-l1600)
             if img_url:
                 img_url = re.sub(r's-l\d+\.', 's-l1600.', img_url)
             
@@ -95,7 +93,10 @@ def scrape_ebay_search(keyword, seen):
 def run_scout():
     print("--- [START] 16€ Hybrid Scout ---", flush=True)
     groq_key = os.getenv("GROQ_API_KEY")
-    if not groq_key: return
+    if not groq_key: 
+        print("[ERROR] Groq API Key fehlt!", flush=True)
+        return
+        
     history = load_history()
     keyword = get_dynamic_keyword(groq_key)
     print(f"[SEARCH] Target: {keyword}", flush=True)
@@ -104,7 +105,6 @@ def run_scout():
     for item in items:
         try:
             description = scrape_ebay_details(item['url'])
-            save_history(item['url'])
 
             prompt = (
                 f"RETAIL MARKET AUDIT - {MAX_BUY_PRICE} EURO MAX BUDGET.\n"
@@ -140,13 +140,18 @@ def run_scout():
             if profit >= MIN_NET_PROFIT and conf >= CONFIDENCE_THRESHOLD:
                 webhook = os.getenv("DISCORD_WEBHOOK")
                 msg = {"content": f"🎯 **CERTIFIED WIN**\n**Item:** {item['title']}\n**Buy:** {item['price']}€ | **Exit:** {resale}€\n**Safety:** {conf}%\n**Profit:** {profit}€\n**Logic:** {data.get('reasoning')}\n**Link:** {item['url']}"}
-                if webhook: requests.post(webhook, json=msg)
+                if webhook: 
+                    requests.post(webhook, json=msg)
+                    print(">>> DISCORD WEBHOOK ERFOLGREICH GESENDET! <<<", flush=True)
                 print(f"[WIN] {item['title']} - Profit: {profit}€ | Conf: {conf}%", flush=True)
             else:
                 if profit > 0:
                     print(f"[REJECT] Conf: {conf}% | Profit: {profit}€", flush=True)
                 else:
                     print(f"[REJECT] Kein Profit ({profit}€) - Item wird ignoriert", flush=True)
+            
+            # WICHTIG: History erst speichern, wenn die Bewertung FEHLERFREI durchlief
+            save_history(item['url'])
                     
         except Exception as e:
             print(f"[ERROR] Skipping item: {str(e)}", flush=True)
