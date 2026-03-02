@@ -46,7 +46,7 @@ def get_dynamic_keyword(groq_key):
         return "Technik Konvolut Bastler"
 
 def scrape_ebay_details(item_url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         resp = requests.get(item_url, headers=headers, timeout=30)
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -56,42 +56,41 @@ def scrape_ebay_details(item_url):
 
 def scrape_ebay_search(keyword, seen):
     safe_keyword = urllib.parse.quote(keyword)
-    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    # &_rss=1 zwingt eBay, den unblockierten Feed zu senden
+    ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000&_rss=1"
+    headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
         resp = requests.get(ebay_url, headers=headers, timeout=30)
         soup = BeautifulSoup(resp.text, "html.parser")
-        item_links = soup.find_all("a", href=re.compile(r"/itm/"))
+        items = soup.find_all("item")
         
-        # --- DEBUG LOG ---
-        print(f"[DEBUG] eBay hat {len(item_links)} rohe Links für '{keyword}' geliefert.", flush=True)
+        print(f"[DEBUG] RSS Feed hat {len(items)} Items für '{keyword}' geliefert.", flush=True)
         
         listings = []
-        processed_urls = set()
-        for link_el in item_links:
-            item_url = link_el["href"].split("?")[0]
-            if item_url in processed_urls or item_url in seen: continue
-            processed_urls.add(item_url)
-            container = link_el
-            for _ in range(8):
-                if container.parent and not re.search(r"\d+,\d{2}", container.text): container = container.parent
-            match = re.search(r"(\d+[\.,]\d{2})", container.text.replace('\xa0', ' '))
-            if not match: continue
-            price = float(match.group(1).replace('.', '').replace(',', '.'))
+        for item in items:
+            title = item.title.text if item.title else "Unbekannt"
+            link = item.link.text if item.link else ""
+            if not link or link in seen: continue
+            
+            desc_text = item.description.text if item.description else ""
+            
+            price_match = re.search(r"EUR\s*(\d+[\.,]\d{2})", desc_text)
+            if not price_match: continue
+            price = float(price_match.group(1).replace('.', '').replace(',', '.'))
+            
             if price > MAX_BUY_PRICE: continue
             
-            img_el = container.find("img")
-            img_url = img_el.get("src") or img_el.get("data-src") or ""
-            
+            img_match = re.search(r'src="(https://i\.ebayimg\.com/[^"]+)"', desc_text)
+            img_url = img_match.group(1) if img_match else ""
             if img_url:
                 img_url = re.sub(r's-l\d+\.', 's-l1600.', img_url)
             
-            listings.append({"title": link_el.text.strip()[:80], "price": price, "url": item_url, "img_url": img_url})
+            listings.append({"title": title[:80], "price": price, "url": link.split("?")[0], "img_url": img_url})
             if len(listings) >= 3: break
         return listings
     except Exception as e:
-        print(f"[DEBUG] Fehler beim Scrapen: {e}", flush=True)
+        print(f"[DEBUG] Fehler beim RSS-Scrapen: {e}", flush=True)
         return []
 
 def run_scout():
@@ -107,9 +106,8 @@ def run_scout():
     
     items = scrape_ebay_search(keyword, history)
     
-    # --- ZUSÄTZLICHES INFO-LOG ---
     if not items:
-        print("[INFO] Keine passenden Items unter 23€ gefunden oder von eBay blockiert.", flush=True)
+        print("[INFO] Keine passenden Items gefunden.", flush=True)
 
     for item in items:
         try:
