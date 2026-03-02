@@ -26,24 +26,11 @@ def save_history(url):
         f.write(url + "\n")
 
 def get_dynamic_keyword(groq_key):
-    try:
-        marken = ["Makita", "Bosch", "Nintendo", "Sony", "Lego", "DJI", "Apple", "Festool", "Knipex", "Wera"]
-        zustaende = ["Defekt", "Konvolut", "Bastler", "Set", "ungeprüft", "Sammlung", "Ersatzteile"]
-        
-        zufalls_seed = f"{random.choice(marken)} {random.choice(zustaende)}"
-        
-        headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        prompt = f"Erstelle genau EINEN realistischen eBay-Suchbegriff für '{zufalls_seed}'. Nur das Keyword, keine Einleitung! (z.B. 'Makita 18V Schrauber defekt Bastler')"
-        
-        payload = {
-            "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.9 
-        }
-        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
-        return resp.json()['choices'][0]['message']['content'].strip('."\' \n')
-    except: 
-        return "Technik Konvolut Bastler"
+    # SMARTE LÖSUNG: Wir nutzen extrem breite, kurze Keywords für maximales Volumen.
+    marken = ["Makita", "Bosch", "Nintendo", "Sony", "Lego", "DJI", "Apple", "Festool", "Knipex", "Wera", "Playstation"]
+    zustaende = ["Defekt", "Konvolut", "Bastler", "Ersatzteile", "ungeprüft"]
+    keyword = f"{random.choice(marken)} {random.choice(zustaende)}"
+    return keyword
 
 def scrape_ebay_details(item_url):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -56,7 +43,6 @@ def scrape_ebay_details(item_url):
 
 def scrape_ebay_search(keyword, seen):
     safe_keyword = urllib.parse.quote(keyword)
-    # &_rss=1 zwingt eBay, den unblockierten Feed zu senden
     ebay_url = f"https://www.ebay.de/sch/i.html?_nkw={safe_keyword}&_sop=10&LH_BIN=1&_udhi={int(MAX_BUY_PRICE)}&LH_ItemCondition=3000|7000&_rss=1"
     headers = {"User-Agent": "Mozilla/5.0"}
     
@@ -75,6 +61,7 @@ def scrape_ebay_search(keyword, seen):
             
             desc_text = item.description.text if item.description else ""
             
+            # Verbesserte Preis-Erkennung für den RSS Feed
             price_match = re.search(r"EUR\s*(\d+[\.,]\d{2})", desc_text)
             if not price_match: continue
             price = float(price_match.group(1).replace('.', '').replace(',', '.'))
